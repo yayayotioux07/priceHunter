@@ -11,10 +11,18 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 app.use(express.json());
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
+
+// Strict rate limit — only 3 searches per minute per IP
+app.use("/api/search", rateLimit({
+  windowMs: 60 * 1000,
+  max: 3,
+  message: { error: "Please wait a moment before searching again." },
+}));
+
 app.use("/api/", rateLimit({
-  windowMs: 10 * 60 * 1000,
-  max: 20,
-  message: { error: "Too many requests. Please wait a few minutes." },
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: "Too many requests." },
 }));
 
 const frontendDist = path.join(__dirname, "../frontend/dist");
@@ -33,51 +41,60 @@ const OFFICIAL_DOMAINS = {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// Global queue to prevent concurrent Anthropic calls
+let isSearching = false;
+const searchQueue = [];
+
+async function processQueue() {
+  if (isSearching || searchQueue.length === 0) return;
+  isSearching = true;
+  const { resolve, reject, fn } = searchQueue.shift();
+  try {
+    const result = await fn();
+    resolve(result);
+  } catch(e) {
+    reject(e);
+  } finally {
+    isSearching = false;
+    processQueue();
+  }
+}
+
+function enqueue(fn) {
+  return new Promise((resolve, reject) => {
+    searchQueue.push({ resolve, reject, fn });
+    processQueue();
+  });
+}
+
 async function searchBrand(brand, searchQuery, categoryFilter) {
   const domain = OFFICIAL_DOMAINS[brand];
 
-  const systemPrompt = `You are a shopping assistant. Use web_search to find products. 
-Search for products on ${domain} and return results as a JSON array.
-Each item must have: name, price (like "$89.99"), url (full https URL from ${domain}), category, description, sale (boolean), originalPrice (or null).
-Return ONLY the raw JSON array. No markdown, no backticks, no explanation.`;
+  const systemPrompt = `You are a shopping assistant. Use web_search to find real products on ${domain}.
+Return ONLY a raw JSON array (no markdown, no backticks) with 2-3 items.
+Each item: {"name":"...","price":"$X.XX","url":"https://...from ${domain}...","category":"...","description":"one sentence","sale":false,"originalPrice":null}
+Only include products whose URLs you actually found in search results on ${domain}.`;
 
-  const userMsg = `Find 3 ${categoryFilter || ""} products matching "${searchQuery}" on ${domain}. Search for them now and return their real URLs and prices.`;
-
-  console.log(`📤 Sending request for ${brand}...`);
+  const userMsg = `Find 2 ${categoryFilter || ""} products matching "${searchQuery}" on ${domain}. Search now and return real product URLs and prices from ${domain} only.`;
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 1500,
+    max_tokens: 1200,
     system: systemPrompt,
     tools: [{ type: "web_search_20250305", name: "web_search" }],
     messages: [{ role: "user", content: userMsg }],
   });
 
-  // Log ALL content blocks
-  console.log(`📥 ${brand} response blocks:`, response.content.map(b => b.type).join(", "));
-
   const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
-  console.log(`📝 ${brand} raw text (first 300 chars):`, text.substring(0, 300));
+  console.log(`📝 ${brand}: ${text.substring(0, 150)}`);
 
-  // Try to extract JSON
   const match = text.match(/\[[\s\S]*?\]/);
-  if (!match) {
-    console.log(`⚠️ ${brand}: no JSON array found in response`);
-    return [];
-  }
+  if (!match) return [];
 
-  try {
-    const products = JSON.parse(match[0]);
-    console.log(`🛍️ ${brand} parsed ${products.length} products, filtering by domain: ${domain}`);
-    products.forEach(p => console.log(`  - ${p.name} | ${p.price} | ${p.url}`));
-
-    const filtered = products.filter(p => p.url && p.url.includes(domain));
-    console.log(`✅ ${brand}: ${filtered.length} passed domain filter`);
-    return filtered.map(p => ({ ...p, brand, source: domain }));
-  } catch(e) {
-    console.log(`❌ ${brand}: JSON parse failed:`, e.message);
-    return [];
-  }
+  const products = JSON.parse(match[0]);
+  return products
+    .filter(p => p.url && p.url.includes(domain))
+    .map(p => ({ ...p, brand, source: domain }));
 }
 
 app.post("/api/search", async (req, res) => {
@@ -89,22 +106,27 @@ app.post("/api/search", async (req, res) => {
 
   console.log(`🔎 "${searchQuery}" | Brands: ${brands.join(", ")}`);
 
-  const allProducts = [];
-
-  for (let i = 0; i < brands.length; i++) {
-    const brand = brands[i];
-    try {
-      console.log(`\n--- Searching ${brand} ---`);
-      const products = await searchBrand(brand, searchQuery, categoryFilter);
-      allProducts.push(...products);
-    } catch (err) {
-      console.error(`❌ ${brand} failed:`, err.message);
+  // Run all brands sequentially inside the queue with 5s delay between each
+  const results = await enqueue(async () => {
+    const allProducts = [];
+    for (let i = 0; i < brands.length; i++) {
+      const brand = brands[i];
+      try {
+        console.log(`🔍 Searching ${brand}...`);
+        const products = await searchBrand(brand, searchQuery, categoryFilter);
+        console.log(`✅ ${brand}: ${products.length} products`);
+        allProducts.push(...products);
+      } catch (err) {
+        console.error(`❌ ${brand}:`, err.message.substring(0, 80));
+      }
+      // 5s delay between brands to stay under 30k tokens/min rate limit
+      if (i < brands.length - 1) await sleep(5000);
     }
-    if (i < brands.length - 1) await sleep(2000);
-  }
+    return allProducts;
+  });
 
-  console.log(`\n✅ Total returned: ${allProducts.length}`);
-  res.json({ products: allProducts, count: allProducts.length });
+  console.log(`✅ Total: ${results.length}`);
+  res.json({ products: results, count: results.length });
 });
 
 app.get("*", (req, res) => {

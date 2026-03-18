@@ -146,8 +146,8 @@ export default function App() {
         {loading && (
           <div style={{ textAlign: "center", padding: "60px 0" }}>
             <div style={{ width: 40, height: 40, border: "3px solid #1e1e1e", borderTopColor: "#c8f04c", borderRadius: "50%", margin: "0 auto 20px", animation: "spin 0.8s linear infinite" }} />
-            <div style={{ color: "#555", fontSize: 14 }}>Scraping official brand websites...</div>
-            <div style={{ color: "#333", fontSize: 12, marginTop: 6 }}>Opening real pages — this takes 20–40 seconds</div>
+            <div style={{ color: "#555", fontSize: 14 }}>Searching official brand websites one by one...</div>
+            <div style={{ color: "#333", fontSize: 12, marginTop: 6 }}>Each brand takes ~5s — searching ${brands?.length || 6} brands takes ~${(brands?.length || 6) * 5}s</div>
           </div>
         )}
 
