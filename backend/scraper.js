@@ -1,4 +1,5 @@
-const puppeteer = require("puppeteer");
+const chromium = require("chrome-aws-lambda");
+const puppeteer = require("puppeteer-core");
 
 const BRAND_URLS = {
   "Guess":          (q) => `https://www.guess.com/en-us/search?q=${encodeURIComponent(q)}`,
@@ -22,22 +23,14 @@ let browser = null;
 
 async function getBrowser() {
   if (!browser || !browser.isConnected()) {
-    console.log("Launching Puppeteer with bundled Chromium...");
+    console.log("Launching browser...");
     browser = await puppeteer.launch({
-      headless: "new",
-      // No executablePath — use Puppeteer's own bundled Chromium
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-zygote",
-        "--single-process",
-        "--disable-extensions",
-      ],
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath,
+      headless: chromium.headless,
     });
-    console.log("✅ Puppeteer browser launched");
+    console.log("✅ Browser launched");
   }
   return browser;
 }
@@ -76,7 +69,7 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
       for (const link of allLinks) {
         const href = link.getAttribute("href") || "";
         if (!href || href === "#" || href.includes("javascript:")) continue;
-        if (href.startsWith("http") && !href.includes(domain.replace("https://www.", ""))) continue;
+        if (href.startsWith("http") && !href.includes(domain.replace("https://www.", "").replace("https://", ""))) continue;
         if (["/help", "/about", "/account", "/cart", "/login", "/wishlist", "/c/", "/collection", "/stores", "/sitemap"].some(s => href.includes(s))) continue;
 
         const card = link.closest("li, article, [class*='product'], [class*='Product'], [class*='tile'], [class*='Tile'], [class*='card'], [class*='Card'], [class*='item'], [class*='Item']") || link;
