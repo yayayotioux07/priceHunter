@@ -27,10 +27,7 @@ app.get("/api/health", (req, res) => {
 
 app.post("/api/search", async (req, res) => {
   const { brands, category, query } = req.body;
-  console.log("=== SEARCH REQUEST ===");
-  console.log("Brands:", brands);
-  console.log("Category:", category);
-  console.log("Query:", query);
+  console.log(`🔎 Search: "${query}" | Brands: ${brands?.join(", ")} | Category: ${category}`);
 
   if (!brands || !Array.isArray(brands) || brands.length === 0) {
     return res.status(400).json({ error: "brands array is required" });
@@ -40,15 +37,18 @@ app.post("/api/search", async (req, res) => {
   const searchQuery = query?.trim() || categoryFilter || "new arrivals";
 
   try {
-    console.log(`Starting scrape for: "${searchQuery}"`);
     const products = await scrapeAllBrands(brands, searchQuery, 3);
-    console.log(`Scrape complete. Total products: ${products.length}`);
-    console.log("Products:", JSON.stringify(products.slice(0, 2), null, 2));
-    res.json({ products, count: products.length });
+
+    let filtered = products;
+    if (categoryFilter) {
+      const byCat = products.filter(p => p.category?.toLowerCase() === categoryFilter.toLowerCase());
+      filtered = byCat.length > 0 ? byCat : products;
+    }
+
+    console.log(`✅ Total products returned: ${filtered.length}`);
+    res.json({ products: filtered, count: filtered.length });
   } catch (err) {
-    console.error("=== SCRAPE ERROR ===");
-    console.error("Message:", err.message);
-    console.error("Stack:", err.stack);
+    console.error("Search error:", err.message);
     res.status(500).json({ error: `Search failed: ${err.message}` });
   }
 });
@@ -59,18 +59,4 @@ app.get("*", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`✅ PriceHunt running on port ${PORT}`);
-  // Test Puppeteer on startup
-  const puppeteer = require("puppeteer");
-  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
-  console.log("Puppeteer executable path:", executablePath || "default");
-  puppeteer.launch({
-    headless: "new",
-    executablePath,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
-  }).then(b => {
-    console.log("✅ Puppeteer launched successfully");
-    b.close();
-  }).catch(e => {
-    console.error("❌ Puppeteer launch FAILED:", e.message);
-  });
 });

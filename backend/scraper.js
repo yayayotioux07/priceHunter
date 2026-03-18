@@ -1,5 +1,4 @@
-const chromium = require("chrome-aws-lambda");
-const puppeteer = require("puppeteer-core");
+const { chromium } = require("playwright");
 
 const BRAND_URLS = {
   "Guess":          (q) => `https://www.guess.com/en-us/search?q=${encodeURIComponent(q)}`,
@@ -22,13 +21,10 @@ const BRAND_DOMAINS = {
 let browser = null;
 
 async function getBrowser() {
-  if (!browser || !browser.isConnected()) {
-    console.log("Launching browser...");
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath,
-      headless: chromium.headless,
+  if (!browser) {
+    console.log("Launching Playwright Chromium...");
+    browser = await chromium.launch({
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     console.log("✅ Browser launched");
   }
@@ -46,20 +42,20 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
   let page = null;
   try {
     const b = await getBrowser();
-    page = await b.newPage();
+    const context = await b.newContext({
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    });
+    page = await context.newPage();
 
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    );
-
-    await page.setRequestInterception(true);
-    page.on("request", (req) => {
-      if (["media", "font"].includes(req.resourceType())) req.abort();
-      else req.continue();
+    // Block heavy resources
+    await page.route("**/*", (route) => {
+      const type = route.request().resourceType();
+      if (["font", "media"].includes(type)) route.abort();
+      else route.continue();
     });
 
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
-    await new Promise((r) => setTimeout(r, 4000));
+    await page.goto(url, { waitUntil: "networkidle", timeout: 45000 });
+    await page.waitForTimeout(4000);
 
     const products = await page.evaluate((domain) => {
       const results = [];
@@ -70,9 +66,9 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
         const href = link.getAttribute("href") || "";
         if (!href || href === "#" || href.includes("javascript:")) continue;
         if (href.startsWith("http") && !href.includes(domain.replace("https://www.", "").replace("https://", ""))) continue;
-        if (["/help", "/about", "/account", "/cart", "/login", "/wishlist", "/c/", "/collection", "/stores", "/sitemap"].some(s => href.includes(s))) continue;
+        if (["/help","/about","/account","/cart","/login","/wishlist","/c/","/collection","/stores","/sitemap"].some(s => href.includes(s))) continue;
 
-        const card = link.closest("li, article, [class*='product'], [class*='Product'], [class*='tile'], [class*='Tile'], [class*='card'], [class*='Card'], [class*='item'], [class*='Item']") || link;
+        const card = link.closest("li,article,[class*='product'],[class*='Product'],[class*='tile'],[class*='Tile'],[class*='card'],[class*='Card'],[class*='item'],[class*='Item']") || link;
         const fullUrl = href.startsWith("http") ? href : domain + href;
         if (seen.has(fullUrl)) continue;
 
@@ -86,7 +82,7 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
         if (["view all","see all","shop now","shop all"].some(s => name.toLowerCase().includes(s))) continue;
 
         const img = card.querySelector("img");
-        const image = img?.src || img?.dataset?.src || img?.dataset?.lazySrc || null;
+        const image = img?.src || img?.dataset?.src || null;
 
         seen.add(fullUrl);
         results.push({
@@ -103,6 +99,7 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
       return results;
     }, domain);
 
+    await context.close();
     console.log(`✅ ${brandName}: found ${products.length} products`);
 
     return products.slice(0, maxProducts).map((p) => ({
@@ -119,9 +116,8 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
 
   } catch (err) {
     console.error(`❌ ${brandName} scrape failed:`, err.message);
-    return [];
-  } finally {
     if (page) await page.close().catch(() => {});
+    return [];
   }
 }
 

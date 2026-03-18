@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "cd frontend && npm install && npm run build && cd ../backend && npm install"
+buildCommand = "cd frontend && npm install && npm run build && cd ../backend && npm install && npx playwright install chromium --with-deps"
 
 [deploy]
 startCommand = "cd backend && node server.js"
