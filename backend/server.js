@@ -25,7 +25,7 @@ app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 const OFFICIAL_DOMAINS = {
   "Guess":          "guess.com",
   "Michael Kors":   "michaelkors.com",
-  "Calvin Klein":   "calvinklein",
+  "Calvin Klein":   "calvinklein.us",
   "Tommy Hilfiger": "tommy.com",
   "Adidas":         "adidas.com",
   "Nike":           "nike.com",
@@ -33,30 +33,51 @@ const OFFICIAL_DOMAINS = {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// Search a single brand with a small focused prompt
 async function searchBrand(brand, searchQuery, categoryFilter) {
-  const domain = OFFICIAL_DOMAINS[brand] || brand.toLowerCase().replace(/\s/g, "") + ".com";
+  const domain = OFFICIAL_DOMAINS[brand];
 
-  const systemPrompt = `You are a product search assistant. Use web search to find real products on ${domain}. Return ONLY a JSON array. Each item: {"name":"...","price":"$X.XX","url":"https://...","sale":false,"originalPrice":null,"category":"...","description":"..."}. URLs must be real URLs from ${domain} found in search results. Return 2-3 products max. No markdown.`;
+  const systemPrompt = `You are a shopping assistant. Use web_search to find products. 
+Search for products on ${domain} and return results as a JSON array.
+Each item must have: name, price (like "$89.99"), url (full https URL from ${domain}), category, description, sale (boolean), originalPrice (or null).
+Return ONLY the raw JSON array. No markdown, no backticks, no explanation.`;
 
-  const userMsg = `Search site:${domain} for "${searchQuery}"${categoryFilter ? ` ${categoryFilter}` : ""}. Return real product URLs from ${domain} only.`;
+  const userMsg = `Find 3 ${categoryFilter || ""} products matching "${searchQuery}" on ${domain}. Search for them now and return their real URLs and prices.`;
+
+  console.log(`📤 Sending request for ${brand}...`);
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 1000,
+    max_tokens: 1500,
     system: systemPrompt,
     tools: [{ type: "web_search_20250305", name: "web_search" }],
     messages: [{ role: "user", content: userMsg }],
   });
 
-  const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
-  const match = text.match(/\[[\s\S]*?\]/);
-  if (!match) return [];
+  // Log ALL content blocks
+  console.log(`📥 ${brand} response blocks:`, response.content.map(b => b.type).join(", "));
 
-  const products = JSON.parse(match[0]);
-  return products
-    .filter(p => p.url && p.url.includes(domain))
-    .map(p => ({ ...p, brand, source: domain }));
+  const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
+  console.log(`📝 ${brand} raw text (first 300 chars):`, text.substring(0, 300));
+
+  // Try to extract JSON
+  const match = text.match(/\[[\s\S]*?\]/);
+  if (!match) {
+    console.log(`⚠️ ${brand}: no JSON array found in response`);
+    return [];
+  }
+
+  try {
+    const products = JSON.parse(match[0]);
+    console.log(`🛍️ ${brand} parsed ${products.length} products, filtering by domain: ${domain}`);
+    products.forEach(p => console.log(`  - ${p.name} | ${p.price} | ${p.url}`));
+
+    const filtered = products.filter(p => p.url && p.url.includes(domain));
+    console.log(`✅ ${brand}: ${filtered.length} passed domain filter`);
+    return filtered.map(p => ({ ...p, brand, source: domain }));
+  } catch(e) {
+    console.log(`❌ ${brand}: JSON parse failed:`, e.message);
+    return [];
+  }
 }
 
 app.post("/api/search", async (req, res) => {
@@ -64,29 +85,25 @@ app.post("/api/search", async (req, res) => {
   if (!brands?.length) return res.status(400).json({ error: "brands required" });
 
   const categoryFilter = category && category !== "All" ? category : "";
-  const searchQuery = query?.trim() || categoryFilter || "bestsellers";
+  const searchQuery = query?.trim() || "handbag";
 
   console.log(`🔎 "${searchQuery}" | Brands: ${brands.join(", ")}`);
 
   const allProducts = [];
 
-  // Search brands one at a time with 1s delay to avoid rate limits
-  for (const brand of brands) {
+  for (let i = 0; i < brands.length; i++) {
+    const brand = brands[i];
     try {
-      console.log(`🔍 Searching ${brand}...`);
+      console.log(`\n--- Searching ${brand} ---`);
       const products = await searchBrand(brand, searchQuery, categoryFilter);
-      console.log(`✅ ${brand}: ${products.length} products`);
       allProducts.push(...products);
     } catch (err) {
       console.error(`❌ ${brand} failed:`, err.message);
     }
-    // Wait 1.5s between brands to stay under token rate limit
-    if (brands.indexOf(brand) < brands.length - 1) {
-      await sleep(1500);
-    }
+    if (i < brands.length - 1) await sleep(2000);
   }
 
-  console.log(`✅ Total: ${allProducts.length} products`);
+  console.log(`\n✅ Total returned: ${allProducts.length}`);
   res.json({ products: allProducts, count: allProducts.length });
 });
 
