@@ -27,6 +27,10 @@ app.get("/api/health", (req, res) => {
 
 app.post("/api/search", async (req, res) => {
   const { brands, category, query } = req.body;
+  console.log("=== SEARCH REQUEST ===");
+  console.log("Brands:", brands);
+  console.log("Category:", category);
+  console.log("Query:", query);
 
   if (!brands || !Array.isArray(brands) || brands.length === 0) {
     return res.status(400).json({ error: "brands array is required" });
@@ -35,26 +39,17 @@ app.post("/api/search", async (req, res) => {
   const categoryFilter = category && category !== "All" ? category : "";
   const searchQuery = query?.trim() || categoryFilter || "new arrivals";
 
-  console.log(`🔎 Search: "${searchQuery}" | Brands: ${brands.join(", ")} | Category: ${categoryFilter || "All"}`);
-
   try {
-    let products = await scrapeAllBrands(brands, searchQuery, 3);
-
-    // Filter by category if specified
-    if (categoryFilter) {
-      const filtered = products.filter(
-        (p) => p.category?.toLowerCase() === categoryFilter.toLowerCase()
-      );
-      // Fall back to all results if category filter returns nothing
-      products = filtered.length > 0 ? filtered : products;
-    }
-
-    console.log(`✅ Total products returned: ${products.length}`);
+    console.log(`Starting scrape for: "${searchQuery}"`);
+    const products = await scrapeAllBrands(brands, searchQuery, 3);
+    console.log(`Scrape complete. Total products: ${products.length}`);
+    console.log("Products:", JSON.stringify(products.slice(0, 2), null, 2));
     res.json({ products, count: products.length });
-
   } catch (err) {
-    console.error("Scrape error:", err.message);
-    res.status(500).json({ error: "Search failed. Please try again." });
+    console.error("=== SCRAPE ERROR ===");
+    console.error("Message:", err.message);
+    console.error("Stack:", err.stack);
+    res.status(500).json({ error: `Search failed: ${err.message}` });
   }
 });
 
@@ -64,4 +59,18 @@ app.get("*", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`✅ PriceHunt running on port ${PORT}`);
+  // Test Puppeteer on startup
+  const puppeteer = require("puppeteer");
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+  console.log("Puppeteer executable path:", executablePath || "default");
+  puppeteer.launch({
+    headless: "new",
+    executablePath,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
+  }).then(b => {
+    console.log("✅ Puppeteer launched successfully");
+    b.close();
+  }).catch(e => {
+    console.error("❌ Puppeteer launch FAILED:", e.message);
+  });
 });

@@ -1,31 +1,31 @@
 const puppeteer = require("puppeteer");
 
 const BRAND_URLS = {
-  "Guess":           (q) => `https://www.guess.com/en-us/search?q=${encodeURIComponent(q)}`,
-  "Michael Kors":    (q) => `https://www.michaelkors.com/search#q=${encodeURIComponent(q)}&start=0`,
-  "Calvin Klein":    (q) => `https://www.calvinklein.us/search?q=${encodeURIComponent(q)}`,
-  "Tommy Hilfiger":  (q) => `https://usa.tommy.com/en/search?q=${encodeURIComponent(q)}`,
-  "Adidas":          (q) => `https://www.adidas.com/us/search?q=${encodeURIComponent(q)}`,
-  "Nike":            (q) => `https://www.nike.com/w?q=${encodeURIComponent(q)}&vst=${encodeURIComponent(q)}`,
+  "Guess":          (q) => `https://www.guess.com/en-us/search?q=${encodeURIComponent(q)}`,
+  "Michael Kors":   (q) => `https://www.michaelkors.com/search#q=${encodeURIComponent(q)}&start=0`,
+  "Calvin Klein":   (q) => `https://www.calvinklein.us/search?q=${encodeURIComponent(q)}`,
+  "Tommy Hilfiger": (q) => `https://usa.tommy.com/en/search?q=${encodeURIComponent(q)}`,
+  "Adidas":         (q) => `https://www.adidas.com/us/search?q=${encodeURIComponent(q)}`,
+  "Nike":           (q) => `https://www.nike.com/w?q=${encodeURIComponent(q)}&vst=${encodeURIComponent(q)}`,
 };
 
 const BRAND_DOMAINS = {
-  "Guess":           "https://www.guess.com",
-  "Michael Kors":    "https://www.michaelkors.com",
-  "Calvin Klein":    "https://www.calvinklein.us",
-  "Tommy Hilfiger":  "https://usa.tommy.com",
-  "Adidas":          "https://www.adidas.com",
-  "Nike":            "https://www.nike.com",
+  "Guess":          "https://www.guess.com",
+  "Michael Kors":   "https://www.michaelkors.com",
+  "Calvin Klein":   "https://www.calvinklein.us",
+  "Tommy Hilfiger": "https://usa.tommy.com",
+  "Adidas":         "https://www.adidas.com",
+  "Nike":           "https://www.nike.com",
 };
 
 let browser = null;
 
 async function getBrowser() {
   if (!browser || !browser.isConnected()) {
-    const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+    console.log("Launching Puppeteer with bundled Chromium...");
     browser = await puppeteer.launch({
       headless: "new",
-      executablePath,
+      // No executablePath — use Puppeteer's own bundled Chromium
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -37,6 +37,7 @@ async function getBrowser() {
         "--disable-extensions",
       ],
     });
+    console.log("✅ Puppeteer browser launched");
   }
   return browser;
 }
@@ -58,7 +59,6 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     );
 
-    // Block heavy resources to speed up
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       if (["media", "font"].includes(req.resourceType())) req.abort();
@@ -66,69 +66,49 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
     });
 
     await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
-
-    // Wait for page to settle
     await new Promise((r) => setTimeout(r, 4000));
 
-    // Generic smart extraction — finds any anchor with a price nearby
-    const products = await page.evaluate((domain, brandName) => {
+    const products = await page.evaluate((domain) => {
       const results = [];
       const seen = new Set();
-
-      // Strategy 1: find all links that look like product pages
       const allLinks = Array.from(document.querySelectorAll("a[href]"));
-      
+
       for (const link of allLinks) {
         const href = link.getAttribute("href") || "";
-        
-        // Skip navigation, social, external non-product links
-        if (!href || href.startsWith("http") && !href.includes(domain.replace("https://", ""))) continue;
-        if (href.includes("javascript:") || href === "#") continue;
-        if (href.includes("/help") || href.includes("/about") || href.includes("/account") || 
-            href.includes("/cart") || href.includes("/login") || href.includes("/wishlist") ||
-            href.includes("/category") || href.includes("/en-us/c/") || href.includes("/collection")) continue;
+        if (!href || href === "#" || href.includes("javascript:")) continue;
+        if (href.startsWith("http") && !href.includes(domain.replace("https://www.", ""))) continue;
+        if (["/help", "/about", "/account", "/cart", "/login", "/wishlist", "/c/", "/collection", "/stores", "/sitemap"].some(s => href.includes(s))) continue;
 
-        const card = link.closest("li, article, div[class*='product'], div[class*='Product'], div[class*='tile'], div[class*='Tile'], div[class*='card'], div[class*='Card'], div[class*='item'], div[class*='Item']") || link;
-
+        const card = link.closest("li, article, [class*='product'], [class*='Product'], [class*='tile'], [class*='Tile'], [class*='card'], [class*='Card'], [class*='item'], [class*='Item']") || link;
         const fullUrl = href.startsWith("http") ? href : domain + href;
-
-        // Avoid duplicates
         if (seen.has(fullUrl)) continue;
 
-        // Find price anywhere in/near the card
         const cardText = card.innerText || "";
         const priceMatch = cardText.match(/\$\s*[\d,]+\.?\d*/g);
         if (!priceMatch) continue;
 
-        // Find product name
-        const nameEl = card.querySelector("h1,h2,h3,h4,p[class*='name'],p[class*='Name'],p[class*='title'],span[class*='name'],span[class*='Name'],span[class*='title'],div[class*='name'],div[class*='Name'],div[class*='title']");
-        const name = nameEl?.innerText?.trim() || link.innerText?.trim() || "";
+        const nameEl = card.querySelector("h1,h2,h3,h4,[class*='name'],[class*='Name'],[class*='title'],[class*='Title']");
+        const name = (nameEl?.innerText?.trim() || link.innerText?.trim() || "").split("\n")[0].trim();
         if (!name || name.length < 3 || name.length > 120) continue;
-        if (name.toLowerCase().includes("view all") || name.toLowerCase().includes("see all") || name.toLowerCase().includes("shop")) continue;
+        if (["view all","see all","shop now","shop all"].some(s => name.toLowerCase().includes(s))) continue;
 
-        // Find image
         const img = card.querySelector("img");
         const image = img?.src || img?.dataset?.src || img?.dataset?.lazySrc || null;
 
-        const price = priceMatch[0];
-        const originalPrice = priceMatch.length > 1 ? priceMatch[0] : null;
-        const salePrice = priceMatch.length > 1 ? priceMatch[priceMatch.length - 1] : priceMatch[0];
-
         seen.add(fullUrl);
         results.push({
-          name: name.split("\n")[0].trim(),
-          price: salePrice,
-          originalPrice: priceMatch.length > 1 ? originalPrice : null,
+          name,
+          price: priceMatch[priceMatch.length - 1],
+          originalPrice: priceMatch.length > 1 ? priceMatch[0] : null,
           sale: priceMatch.length > 1,
           url: fullUrl,
-          image: image && image.startsWith("http") ? image : null,
+          image: image?.startsWith("http") ? image : null,
         });
 
         if (results.length >= 8) break;
       }
-
       return results;
-    }, domain, brandName);
+    }, domain);
 
     console.log(`✅ ${brandName}: found ${products.length} products`);
 
@@ -155,17 +135,16 @@ async function scrapeBrand(brandName, query, maxProducts = 4) {
 function inferCategory(name) {
   if (!name) return "Fashion";
   const n = name.toLowerCase();
-  if (n.includes("bag") || n.includes("tote") || n.includes("purse") || n.includes("handbag") || n.includes("clutch") || n.includes("wallet") || n.includes("satchel") || n.includes("crossbody")) return "Bags";
-  if (n.includes("shoe") || n.includes("sneaker") || n.includes("boot") || n.includes("sandal") || n.includes("loafer") || n.includes("heel") || n.includes("runner") || n.includes("trainer")) return "Shoes";
-  if (n.includes("jacket") || n.includes("coat") || n.includes("puffer") || n.includes("hoodie") || n.includes("sweatshirt") || n.includes("blazer")) return "Jackets";
-  if (n.includes("shirt") || n.includes("tee") || n.includes("polo") || n.includes("top") || n.includes("blouse") || n.includes("dress") || n.includes("jeans") || n.includes("pant") || n.includes("short") || n.includes("skirt")) return "Clothing";
-  if (n.includes("watch") || n.includes("belt") || n.includes("hat") || n.includes("cap") || n.includes("scarf") || n.includes("sunglass") || n.includes("jewel") || n.includes("bracelet") || n.includes("necklace")) return "Accessories";
+  if (n.match(/bag|tote|purse|handbag|clutch|wallet|satchel|crossbody/)) return "Bags";
+  if (n.match(/shoe|sneaker|boot|sandal|loafer|heel|runner|trainer/)) return "Shoes";
+  if (n.match(/jacket|coat|puffer|hoodie|sweatshirt|blazer/)) return "Jackets";
+  if (n.match(/shirt|tee|polo|top|blouse|dress|jeans|pant|short|skirt/)) return "Clothing";
+  if (n.match(/watch|belt|hat|cap|scarf|sunglass|jewel|bracelet|necklace/)) return "Accessories";
   return "Fashion";
 }
 
 async function scrapeAllBrands(brands, query, maxPerBrand = 3) {
   const results = [];
-  // Scrape 2 brands at a time to avoid memory issues
   for (let i = 0; i < brands.length; i += 2) {
     const chunk = brands.slice(i, i + 2);
     const settled = await Promise.allSettled(
