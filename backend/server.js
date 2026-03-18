@@ -13,7 +13,7 @@ app.use(express.json());
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use("/api/", rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 30,
+  max: 20,
   message: { error: "Too many requests. Please wait a few minutes." },
 }));
 
@@ -22,7 +22,6 @@ app.use(express.static(frontendDist));
 
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
-// Official brand domains for URL validation
 const OFFICIAL_DOMAINS = {
   "Guess":          "guess.com",
   "Michael Kors":   "michaelkors.com",
@@ -31,6 +30,34 @@ const OFFICIAL_DOMAINS = {
   "Adidas":         "adidas.com",
   "Nike":           "nike.com",
 };
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Search a single brand with a small focused prompt
+async function searchBrand(brand, searchQuery, categoryFilter) {
+  const domain = OFFICIAL_DOMAINS[brand] || brand.toLowerCase().replace(/\s/g, "") + ".com";
+
+  const systemPrompt = `You are a product search assistant. Use web search to find real products on ${domain}. Return ONLY a JSON array. Each item: {"name":"...","price":"$X.XX","url":"https://...","sale":false,"originalPrice":null,"category":"...","description":"..."}. URLs must be real URLs from ${domain} found in search results. Return 2-3 products max. No markdown.`;
+
+  const userMsg = `Search site:${domain} for "${searchQuery}"${categoryFilter ? ` ${categoryFilter}` : ""}. Return real product URLs from ${domain} only.`;
+
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1000,
+    system: systemPrompt,
+    tools: [{ type: "web_search_20250305", name: "web_search" }],
+    messages: [{ role: "user", content: userMsg }],
+  });
+
+  const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
+  const match = text.match(/\[[\s\S]*?\]/);
+  if (!match) return [];
+
+  const products = JSON.parse(match[0]);
+  return products
+    .filter(p => p.url && p.url.includes(domain))
+    .map(p => ({ ...p, brand, source: domain }));
+}
 
 app.post("/api/search", async (req, res) => {
   const { brands, category, query } = req.body;
@@ -41,65 +68,26 @@ app.post("/api/search", async (req, res) => {
 
   console.log(`🔎 "${searchQuery}" | Brands: ${brands.join(", ")}`);
 
-  // Search one brand at a time with web search to get real URLs
-  const systemPrompt = `You are a fashion product search assistant with web search access.
+  const allProducts = [];
 
-STRICT RULES:
-1. Use web search to find products. Search each brand separately.
-2. ONLY return URLs that you actually found in search results — never construct or guess URLs.
-3. Every URL must be from the brand's official website domain.
-4. If you cannot find a real product URL for a brand, skip that brand entirely.
-5. Verify the product exists by checking search result snippets before including it.
-
-For each product found return:
-- brand: string
-- name: string (exact product name from search result)
-- price: string (exact price from search result, e.g. "$89.99")
-- category: string (Bags/Shoes/Clothing/Accessories/Jackets)
-- description: string (one sentence from the search result)
-- url: string (EXACT URL from search results — must be from official brand site)
-- sale: boolean
-- originalPrice: string (if on sale)
-- source: string (domain, e.g. "guess.com")
-
-Return ONLY a valid JSON array. No markdown. No explanations. Skip any product where you are not 100% sure the URL is real and correct.`;
-
-  const userMsg = `Search for "${searchQuery}" ${categoryFilter ? `in category ${categoryFilter}` : ""} from these brands: ${brands.join(", ")}.
-
-For each brand, search: site:[official-domain] ${searchQuery}
-Official domains: ${brands.map(b => `${b} → ${OFFICIAL_DOMAINS[b] || b.toLowerCase() + ".com"}`).join(", ")}
-
-Only return products with URLs you actually found in search results. Find 2-3 per brand.`;
-
-  try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 5000,
-      system: systemPrompt,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      messages: [{ role: "user", content: userMsg }],
-    });
-
-    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
-    const match = text.match(/\[[\s\S]*\]/);
-    if (!match) return res.status(502).json({ error: "No results found. Try a different search." });
-
-    const products = JSON.parse(match[0]);
-
-    // Hard filter: only keep products whose URL contains the official domain
-    const verified = products.filter(p => {
-      if (!p.url || !p.brand) return false;
-      const domain = OFFICIAL_DOMAINS[p.brand];
-      return domain && p.url.includes(domain);
-    });
-
-    console.log(`✅ ${verified.length} verified products (${products.length} raw)`);
-    res.json({ products: verified, count: verified.length });
-
-  } catch (err) {
-    console.error("Error:", err.message);
-    res.status(500).json({ error: "Search failed: " + err.message });
+  // Search brands one at a time with 1s delay to avoid rate limits
+  for (const brand of brands) {
+    try {
+      console.log(`🔍 Searching ${brand}...`);
+      const products = await searchBrand(brand, searchQuery, categoryFilter);
+      console.log(`✅ ${brand}: ${products.length} products`);
+      allProducts.push(...products);
+    } catch (err) {
+      console.error(`❌ ${brand} failed:`, err.message);
+    }
+    // Wait 1.5s between brands to stay under token rate limit
+    if (brands.indexOf(brand) < brands.length - 1) {
+      await sleep(1500);
+    }
   }
+
+  console.log(`✅ Total: ${allProducts.length} products`);
+  res.json({ products: allProducts, count: allProducts.length });
 });
 
 app.get("*", (req, res) => {
