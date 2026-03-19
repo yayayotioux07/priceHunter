@@ -5,6 +5,7 @@ const fetch = require("node-fetch");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const SCRAPINGBEE_KEY = process.env.SCRAPINGBEE_KEY;
 
 app.set("trust proxy", 1);
 app.use(express.json());
@@ -14,7 +15,10 @@ app.use(express.static(frontendDist));
 
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
-// Brand sale page URLs
+// In-memory cache — store results for 6 hours to save credits
+const cache = new Map();
+const CACHE_TTL = 6 * 60 * 60 * 1000;
+
 const SALE_URLS = {
   "guess": {
     "All":         "https://www.guess.com/en-us/guess/women/sale/",
@@ -81,54 +85,44 @@ const BRAND_DOMAINS = {
   "nike":           "www.nike.com",
 };
 
-// Parse product cards from raw HTML
 function parseProducts(html, brandId) {
   const domain = BRAND_DOMAINS[brandId];
   const baseUrl = "https://" + domain;
   const results = [];
   const seen = new Set();
 
-  // Extract all <a href> links with prices nearby using regex (no DOM in Node)
-  // Find product links — look for hrefs that seem like product pages
-  const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  const priceRegex = /\$[\d,]+\.?\d*/g;
-  const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/i;
-  const nameRegex = /<(?:h[1-6]|p|span|div)[^>]*class=["'][^"']*(?:name|title|product)[^"']*["'][^>]*>([^<]+)<\/(?:h[1-6]|p|span|div)>/i;
-
-  // Split HTML into chunks around links and look for price patterns
-  const chunks = html.split(/<li|<article|<div[^>]*class="[^"]*(?:product|tile|card|item)[^"]*"/i);
+  // Split into chunks that likely contain product cards
+  const chunks = html.split(/<(?:li|article|div)[^>]*class="[^"]*(?:product|tile|card|item|plp)[^"]*"/i);
 
   for (const chunk of chunks) {
-    const prices = chunk.match(priceRegex);
+    const prices = chunk.match(/\$[\d,]+\.?\d*/g);
     if (!prices || prices.length === 0) continue;
 
-    // Find a link in this chunk
     const linkMatch = chunk.match(/href=["']([^"'#][^"']*?)["']/);
     if (!linkMatch) continue;
 
     let href = linkMatch[1];
     if (href.includes("javascript:") || href.includes("mailto:")) continue;
-    if (["/sale","/en/sale","/en-us/sale","/cart","/account","/login","/help","/stores"].some(s => href === s || href === s + "/")) continue;
+    if (["/sale", "/en/sale", "/en-us/sale", "/cart", "/account", "/login", "/help", "/stores"]
+      .some(s => href === s || href === s + "/")) continue;
 
     const fullUrl = href.startsWith("http") ? href : baseUrl + href;
     if (!fullUrl.includes(domain)) continue;
     if (seen.has(fullUrl)) continue;
 
-    // Extract name — look for text content between tags
-    const textContent = chunk.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    const words = textContent.split(" ").filter(w => w.length > 1);
-    // Name is usually the first meaningful non-price text
-    const nameParts = [];
-    for (const w of words) {
-      if (w.match(/^\$/) || w.match(/^\d+%?$/)) break;
-      nameParts.push(w);
-      if (nameParts.length >= 8) break;
-    }
-    const name = nameParts.join(" ").trim();
+    // Extract clean text for name
+    const text = chunk.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const words = text.split(" ").filter(w => w.length > 1 && !w.match(/^\$/) && !w.match(/^\d+%?$/));
+    const name = words.slice(0, 10).join(" ").trim();
     if (!name || name.length < 3) continue;
 
     // Extract image
-    const imgMatch = chunk.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*?)["']/i);
+    const imgMatch = chunk.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"'?]*)/i);
     const image = imgMatch ? (imgMatch[1].startsWith("http") ? imgMatch[1] : baseUrl + imgMatch[1]) : null;
 
     const salePrice = prices[prices.length - 1];
@@ -136,48 +130,66 @@ function parseProducts(html, brandId) {
 
     seen.add(fullUrl);
     results.push({ name, price: salePrice, originalPrice, sale: true, url: fullUrl, image });
-
     if (results.length >= 12) break;
   }
 
   return results;
 }
 
-// Fetch sale page server-side (no CORS issues)
 app.get("/api/products/:brandId", async (req, res) => {
   const { brandId } = req.params;
   const category = req.query.category || "All";
+  const cacheKey = `${brandId}-${category}`;
+
+  // Check cache first
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    console.log(`📦 Cache hit: ${cacheKey}`);
+    return res.json({ ...cached.data, cached: true });
+  }
 
   const urls = SALE_URLS[brandId];
   if (!urls) return res.status(404).json({ error: "Brand not found" });
 
   const saleUrl = urls[category] || urls["All"];
-  console.log(`🔍 Fetching ${brandId} / ${category}: ${saleUrl}`);
+  console.log(`🔍 ScrapingBee: ${brandId} / ${category}`);
+
+  if (!SCRAPINGBEE_KEY) {
+    return res.json({ products: [], saleUrl, blocked: true, error: "No ScrapingBee key configured" });
+  }
 
   try {
-    const response = await fetch(saleUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "no-cache",
-      },
-      timeout: 15000,
+    // Use ScrapingBee with JS rendering enabled
+    const apiUrl = `https://app.scrapingbee.com/api/v1/?` + new URLSearchParams({
+      api_key: SCRAPINGBEE_KEY,
+      url: saleUrl,
+      render_js: "true",
+      wait: "3000",          // wait 3s for JS to render
+      block_ads: "true",
+      block_resources: "false",
     });
 
+    const response = await fetch(apiUrl, { timeout: 60000 });
+    console.log(`📄 ScrapingBee status: ${response.status} for ${brandId}`);
+
     if (!response.ok) {
-      console.warn(`⚠️ ${brandId}: HTTP ${response.status}`);
-      return res.json({ products: [], saleUrl, blocked: true, status: response.status });
+      const errText = await response.text();
+      console.error(`❌ ScrapingBee error: ${errText.substring(0, 200)}`);
+      return res.json({ products: [], saleUrl, blocked: true });
     }
 
     const html = await response.text();
     console.log(`📄 ${brandId}: got ${html.length} bytes`);
 
     const products = parseProducts(html, brandId);
-    console.log(`✅ ${brandId}: parsed ${products.length} products`);
+    console.log(`✅ ${brandId}: ${products.length} products`);
 
-    res.json({ products, saleUrl, blocked: products.length === 0 });
+    const data = { products, saleUrl, blocked: products.length === 0 };
+
+    // Cache the result
+    cache.set(cacheKey, { data, timestamp: Date.now() });
+
+    res.json(data);
   } catch (err) {
     console.error(`❌ ${brandId}:`, err.message);
     res.json({ products: [], saleUrl, blocked: true, error: err.message });
