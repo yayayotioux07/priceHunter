@@ -15,7 +15,6 @@ app.use(express.static(frontendDist));
 
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
-// In-memory cache — store results for 6 hours to save credits
 const cache = new Map();
 const CACHE_TTL = 6 * 60 * 60 * 1000;
 
@@ -85,63 +84,83 @@ const BRAND_DOMAINS = {
   "nike":           "www.nike.com",
 };
 
-function parseProducts(html, brandId) {
-  const domain = BRAND_DOMAINS[brandId];
-  const baseUrl = "https://" + domain;
-  const results = [];
-  const seen = new Set();
-
-  // Split into chunks that likely contain product cards
-  const chunks = html.split(/<(?:li|article|div)[^>]*class="[^"]*(?:product|tile|card|item|plp)[^"]*"/i);
-
-  for (const chunk of chunks) {
-    const prices = chunk.match(/\$[\d,]+\.?\d*/g);
-    if (!prices || prices.length === 0) continue;
-
-    const linkMatch = chunk.match(/href=["']([^"'#][^"']*?)["']/);
-    if (!linkMatch) continue;
-
-    let href = linkMatch[1];
-    if (href.includes("javascript:") || href.includes("mailto:")) continue;
-    if (["/sale", "/en/sale", "/en-us/sale", "/cart", "/account", "/login", "/help", "/stores"]
-      .some(s => href === s || href === s + "/")) continue;
-
-    const fullUrl = href.startsWith("http") ? href : baseUrl + href;
-    if (!fullUrl.includes(domain)) continue;
-    if (seen.has(fullUrl)) continue;
-
-    // Extract clean text for name
-    const text = chunk.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    const words = text.split(" ").filter(w => w.length > 1 && !w.match(/^\$/) && !w.match(/^\d+%?$/));
-    const name = words.slice(0, 10).join(" ").trim();
-    if (!name || name.length < 3) continue;
-
-    // Extract image
-    const imgMatch = chunk.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"'?]*)/i);
-    const image = imgMatch ? (imgMatch[1].startsWith("http") ? imgMatch[1] : baseUrl + imgMatch[1]) : null;
-
-    const salePrice = prices[prices.length - 1];
-    const originalPrice = prices.length > 1 ? prices[0] : null;
-
-    seen.add(fullUrl);
-    results.push({ name, price: salePrice, originalPrice, sale: true, url: fullUrl, image });
-    if (results.length >= 12) break;
-  }
-
-  return results;
-}
+// Brand-specific JS extraction scripts — run inside the browser via ScrapingBee
+const EXTRACT_SCRIPTS = {
+  "guess": `
+    const items = [];
+    document.querySelectorAll('.product-tile, [class*="product-tile"]').forEach(el => {
+      const name = el.querySelector('[class*="name"], [class*="title"]')?.innerText?.trim();
+      const prices = [...el.querySelectorAll('[class*="price"]')].map(p => p.innerText.trim()).filter(p => p.includes('$'));
+      const url = el.querySelector('a')?.href;
+      const img = el.querySelector('img')?.src;
+      if (name && prices.length && url) items.push({ name, price: prices[prices.length-1], originalPrice: prices.length > 1 ? prices[0] : null, url, image: img, sale: true });
+    });
+    JSON.stringify(items.slice(0, 12));
+  `,
+  "michael_kors": `
+    const items = [];
+    document.querySelectorAll('[class*="product"], [class*="ProductTile"], [class*="product-tile"]').forEach(el => {
+      const name = el.querySelector('[class*="name"], [class*="Name"], h3, h2')?.innerText?.trim();
+      const prices = [...el.querySelectorAll('[class*="price"], [class*="Price"]')].map(p => p.innerText.trim()).filter(p => p.includes('$'));
+      const url = el.querySelector('a')?.href;
+      const img = el.querySelector('img')?.src;
+      if (name && prices.length && url) items.push({ name, price: prices[prices.length-1], originalPrice: prices.length > 1 ? prices[0] : null, url, image: img, sale: true });
+    });
+    JSON.stringify(items.slice(0, 12));
+  `,
+  "calvin_klein": `
+    const items = [];
+    document.querySelectorAll('[class*="product-card"], [class*="ProductCard"], [class*="product-tile"]').forEach(el => {
+      const name = el.querySelector('[class*="name"], [class*="title"], h3, h2')?.innerText?.trim();
+      const prices = [...el.querySelectorAll('[class*="price"], [class*="Price"]')].map(p => p.innerText.trim()).filter(p => p.includes('$'));
+      const url = el.querySelector('a')?.href;
+      const img = el.querySelector('img')?.src;
+      if (name && prices.length && url) items.push({ name, price: prices[prices.length-1], originalPrice: prices.length > 1 ? prices[0] : null, url, image: img, sale: true });
+    });
+    JSON.stringify(items.slice(0, 12));
+  `,
+  "tommy_hilfiger": `
+    const items = [];
+    document.querySelectorAll('[class*="product"], [class*="tile"], [class*="card"]').forEach(el => {
+      const name = el.querySelector('[class*="name"], [class*="title"], h3, h2')?.innerText?.trim();
+      const prices = [...el.querySelectorAll('[class*="price"], [class*="Price"]')].map(p => p.innerText.trim()).filter(p => p.includes('$'));
+      const url = el.querySelector('a')?.href;
+      const img = el.querySelector('img')?.src;
+      if (name && prices.length && url) items.push({ name, price: prices[prices.length-1], originalPrice: prices.length > 1 ? prices[0] : null, url, image: img, sale: true });
+    });
+    JSON.stringify(items.slice(0, 12));
+  `,
+  "adidas": `
+    const items = [];
+    document.querySelectorAll('[class*="product-card"], [data-testid="product-card"], [class*="glass-product-card"]').forEach(el => {
+      const name = el.querySelector('[class*="name"], [data-testid*="name"], h3, h2')?.innerText?.trim();
+      const prices = [...el.querySelectorAll('[class*="price"], [data-testid*="price"]')].map(p => p.innerText.trim()).filter(p => p.includes('$'));
+      const link = el.closest('a') || el.querySelector('a');
+      const url = link?.href;
+      const img = el.querySelector('img')?.src;
+      if (name && prices.length && url) items.push({ name, price: prices[prices.length-1], originalPrice: prices.length > 1 ? prices[0] : null, url, image: img, sale: true });
+    });
+    JSON.stringify(items.slice(0, 12));
+  `,
+  "nike": `
+    const items = [];
+    document.querySelectorAll('[class*="product-card"], [data-testid="product-card"]').forEach(el => {
+      const name = el.querySelector('[class*="title"], [class*="name"], h3, h2')?.innerText?.trim();
+      const prices = [...el.querySelectorAll('[class*="price"]')].map(p => p.innerText.trim()).filter(p => p.includes('$'));
+      const link = el.closest('a') || el.querySelector('a');
+      const url = link?.href;
+      const img = el.querySelector('img')?.src;
+      if (name && prices.length && url) items.push({ name, price: prices[prices.length-1], originalPrice: prices.length > 1 ? prices[0] : null, url, image: img, sale: true });
+    });
+    JSON.stringify(items.slice(0, 12));
+  `,
+};
 
 app.get("/api/products/:brandId", async (req, res) => {
   const { brandId } = req.params;
   const category = req.query.category || "All";
   const cacheKey = `${brandId}-${category}`;
 
-  // Check cache first
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     console.log(`📦 Cache hit: ${cacheKey}`);
@@ -152,49 +171,122 @@ app.get("/api/products/:brandId", async (req, res) => {
   if (!urls) return res.status(404).json({ error: "Brand not found" });
 
   const saleUrl = urls[category] || urls["All"];
+  const extractScript = EXTRACT_SCRIPTS[brandId];
+
   console.log(`🔍 ScrapingBee: ${brandId} / ${category}`);
 
   if (!SCRAPINGBEE_KEY) {
-    return res.json({ products: [], saleUrl, blocked: true, error: "No ScrapingBee key configured" });
+    return res.json({ products: [], saleUrl, blocked: true, error: "No SCRAPINGBEE_KEY set" });
   }
 
   try {
-    // Use ScrapingBee with JS rendering enabled
-    const apiUrl = `https://app.scrapingbee.com/api/v1/?` + new URLSearchParams({
+    const params = new URLSearchParams({
       api_key: SCRAPINGBEE_KEY,
       url: saleUrl,
       render_js: "true",
-      wait: "3000",          // wait 3s for JS to render
+      wait: "5000",
       block_ads: "true",
       block_resources: "false",
+      stealth_proxy: "true",
     });
 
+    // Use JS execution to extract data directly from the rendered DOM
+    if (extractScript) {
+      params.set("js_scenario", JSON.stringify({
+        instructions: [
+          { wait: 5000 },
+          { evaluate: extractScript }
+        ]
+      }));
+    }
+
+    const apiUrl = `https://app.scrapingbee.com/api/v1/?${params}`;
     const response = await fetch(apiUrl, { timeout: 60000 });
+
     console.log(`📄 ScrapingBee status: ${response.status} for ${brandId}`);
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`❌ ScrapingBee error: ${errText.substring(0, 200)}`);
+      console.error(`❌ ScrapingBee error (${response.status}): ${errText.substring(0, 300)}`);
       return res.json({ products: [], saleUrl, blocked: true });
     }
 
-    const html = await response.text();
-    console.log(`📄 ${brandId}: got ${html.length} bytes`);
+    const text = await response.text();
+    console.log(`📄 ${brandId}: got ${text.length} bytes, preview: ${text.substring(0, 200)}`);
 
-    const products = parseProducts(html, brandId);
+    // Try to parse as JSON first (from js_scenario evaluate result)
+    let products = [];
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        products = parsed;
+      } else if (parsed && typeof parsed === "object") {
+        // ScrapingBee wraps evaluate result
+        const inner = parsed.body || parsed.result || parsed.data;
+        if (typeof inner === "string") products = JSON.parse(inner);
+        else if (Array.isArray(inner)) products = inner;
+      }
+    } catch (e) {
+      // Not JSON — it's HTML, try parsing
+      console.log(`📝 Not JSON, parsing as HTML...`);
+      products = parseProductsFromHtml(text, brandId);
+    }
+
+    // Validate products
+    const domain = BRAND_DOMAINS[brandId];
+    products = products
+      .filter(p => p && p.name && p.price && p.url)
+      .filter(p => p.url.includes(domain) || p.url.includes(brandId.replace("_", "")))
+      .slice(0, 12);
+
     console.log(`✅ ${brandId}: ${products.length} products`);
 
     const data = { products, saleUrl, blocked: products.length === 0 };
-
-    // Cache the result
     cache.set(cacheKey, { data, timestamp: Date.now() });
-
     res.json(data);
+
   } catch (err) {
     console.error(`❌ ${brandId}:`, err.message);
     res.json({ products: [], saleUrl, blocked: true, error: err.message });
   }
 });
+
+// Fallback HTML parser
+function parseProductsFromHtml(html, brandId) {
+  const domain = BRAND_DOMAINS[brandId];
+  const baseUrl = "https://" + domain;
+  const results = [];
+  const seen = new Set();
+
+  const chunks = html.split(/<(?:li|article|div)[^>]*class="[^"]*(?:product|tile|card|item)[^"]*"/i);
+  for (const chunk of chunks) {
+    const prices = chunk.match(/\$[\d,]+\.?\d*/g);
+    if (!prices) continue;
+
+    const linkMatch = chunk.match(/href=["']([^"'#][^"']*?)["']/);
+    if (!linkMatch) continue;
+
+    const href = linkMatch[1];
+    if (href.includes("javascript:") || href.includes("mailto:")) continue;
+
+    const fullUrl = href.startsWith("http") ? href : baseUrl + href;
+    if (!fullUrl.includes(domain)) continue;
+    if (seen.has(fullUrl)) continue;
+
+    const text = chunk.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    const words = text.split(" ").filter(w => w.length > 1 && !w.match(/^\$/) && !w.match(/^\d+%?$/));
+    const name = words.slice(0, 8).join(" ").trim();
+    if (!name || name.length < 3) continue;
+
+    const imgMatch = chunk.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"'?]*)/i);
+    const image = imgMatch ? (imgMatch[1].startsWith("http") ? imgMatch[1] : baseUrl + imgMatch[1]) : null;
+
+    seen.add(fullUrl);
+    results.push({ name, price: prices[prices.length - 1], originalPrice: prices.length > 1 ? prices[0] : null, sale: true, url: fullUrl, image });
+    if (results.length >= 12) break;
+  }
+  return results;
+}
 
 app.get("*", (req, res) => {
   res.sendFile(path.join(frontendDist, "index.html"));
