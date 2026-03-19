@@ -1,38 +1,66 @@
 import { useState, useEffect, useRef } from "react";
 
-const BRANDS = [
-  { id: "guess",          name: "Guess",           emoji: "👜", site: "guess.com" },
-  { id: "michael_kors",   name: "Michael Kors",    emoji: "💼", site: "michaelkors.com" },
-  { id: "calvin_klein",   name: "Calvin Klein",    emoji: "🖤", site: "calvinklein.us" },
-  { id: "tommy_hilfiger", name: "Tommy Hilfiger",  emoji: "⚓", site: "tommy.com" },
-  { id: "adidas",         name: "Adidas",          emoji: "🦶", site: "adidas.com" },
-  { id: "nike",           name: "Nike",            emoji: "✔️", site: "nike.com" },
+const CATEGORIES = [
+  { id: "All",             label: "All Deals",       emoji: "🏷️" },
+  { id: "Electronics",     label: "Electronics",     emoji: "📺" },
+  { id: "Clothing",        label: "Clothing",        emoji: "👕" },
+  { id: "Food & Grocery",  label: "Food & Grocery",  emoji: "🛒" },
+  { id: "Home & Garden",   label: "Home & Garden",   emoji: "🏡" },
+  { id: "Appliances",      label: "Appliances",      emoji: "🍳" },
+  { id: "Jewelry",         label: "Jewelry",         emoji: "💎" },
+  { id: "Toys",            label: "Toys",            emoji: "🧸" },
+  { id: "Health & Beauty", label: "Health & Beauty", emoji: "💊" },
 ];
-
-const CATEGORIES = ["All", "Bags", "Shoes", "Clothing", "Accessories", "Sneakers", "Jackets"];
 
 function ProductCard({ product }) {
   if (!product?.name) return null;
+  const savingsPct = product.originalPrice && product.price
+    ? Math.round((1 - parseFloat(product.price.replace(/[^0-9.]/g, "")) / parseFloat(product.originalPrice.replace(/[^0-9.]/g, ""))) * 100)
+    : null;
+
   return (
     <a href={product.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
       <div
-        style={{ background: "#0e0e0e", border: "1px solid #1e1e1e", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column", transition: "border-color 0.15s", height: "100%" }}
-        onMouseEnter={(e) => e.currentTarget.style.borderColor = "#c8f04c"}
-        onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1e1e1e"}
+        style={{ background: "#0e0e0e", border: "1px solid #1e1e1e", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", transition: "border-color 0.15s, transform 0.15s", height: "100%", cursor: "pointer" }}
+        onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#c8f04c"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#1e1e1e"; e.currentTarget.style.transform = "translateY(0)"; }}
       >
-        {product.image && (
-          <div style={{ width: "100%", height: 180, background: "#161616", overflow: "hidden" }}>
-            <img src={product.image} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "cover" }}
-              onError={(e) => { e.target.parentElement.style.display = "none"; }} />
+        {/* Savings badge */}
+        {savingsPct > 0 && (
+          <div style={{ background: "#c8f04c", padding: "6px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: "#0a0a0a", letterSpacing: "0.06em" }}>SAVE {savingsPct}%</span>
+            {product.savings && <span style={{ fontSize: 11, fontWeight: 700, color: "#0a0a0a" }}>{product.savings} off</span>}
           </div>
         )}
-        <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#f0ede8", lineHeight: 1.3 }}>{product.name}</div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: "auto", paddingTop: 8 }}>
-            <span style={{ fontSize: 18, fontWeight: 800, color: "#c8f04c" }}>{product.price}</span>
+
+        <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
+          {/* Item number */}
+          {product.itemNumber && (
+            <div style={{ fontSize: 10, color: "#444", fontWeight: 600, letterSpacing: "0.08em" }}>
+              ITEM #{product.itemNumber}
+            </div>
+          )}
+
+          {/* Name */}
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#f0ede8", lineHeight: 1.4, flex: 1 }}>
+            {product.name}
+          </div>
+
+          {/* Prices */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 8 }}>
+            <span style={{ fontSize: 22, fontWeight: 800, color: "#c8f04c", letterSpacing: "-0.02em" }}>
+              {product.price}
+            </span>
             {product.originalPrice && (
-              <span style={{ fontSize: 12, color: "#444", textDecoration: "line-through" }}>{product.originalPrice}</span>
+              <span style={{ fontSize: 13, color: "#444", textDecoration: "line-through" }}>
+                {product.originalPrice}
+              </span>
             )}
+          </div>
+
+          {/* View link */}
+          <div style={{ marginTop: 4, fontSize: 12, color: "#555", fontWeight: 600 }}>
+            View on Costco.com ↗
           </div>
         </div>
       </div>
@@ -40,172 +68,189 @@ function ProductCard({ product }) {
   );
 }
 
-function BrandSection({ brand, category }) {
-  const [state, setState] = useState("loading");
-  const [products, setProducts] = useState([]);
-  const [saleUrl, setSaleUrl] = useState("#");
-  const loadedKey = useRef(null);
-
-  useEffect(() => {
-    const key = `${brand.id}-${category}`;
-    if (loadedKey.current === key) return;
-    loadedKey.current = key;
-
-    setState("loading");
-    setProducts([]);
-
-    fetch(`/api/products/${brand.id}?category=${encodeURIComponent(category)}`)
-      .then(r => r.json())
-      .then(data => {
-        setSaleUrl(data.saleUrl || "#");
-        if (data.products?.length > 0) {
-          setProducts(data.products);
-          setState("done");
-        } else {
-          setState("blocked");
-        }
-      })
-      .catch(() => setState("error"));
-  }, [brand.id, category]);
-
-  return (
-    <div style={{ marginBottom: 48 }}>
-      {/* Brand header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingBottom: 14, borderBottom: "1px solid #1a1a1a" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 24 }}>{brand.emoji}</span>
-          <div>
-            <div style={{ fontSize: 17, fontWeight: 800, color: "#f0ede8", letterSpacing: "-0.02em" }}>{brand.name}</div>
-            <div style={{ fontSize: 11, color: "#444" }}>{brand.site} · {category} Sale</div>
-          </div>
-        </div>
-        <a href={saleUrl} target="_blank" rel="noopener noreferrer" style={{
-          padding: "8px 16px", background: "transparent", border: "1px solid #2a2a2a",
-          borderRadius: 6, color: "#888", fontSize: 12, fontWeight: 700, textDecoration: "none",
-          transition: "all 0.15s",
-        }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#f0ede8"; e.currentTarget.style.borderColor = "#444"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          View All ↗
-        </a>
-      </div>
-
-      {state === "loading" && (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "24px 0", color: "#555" }}>
-          <div style={{ width: 18, height: 18, border: "2px solid #222", borderTopColor: "#c8f04c", borderRadius: "50%", animation: "spin 0.7s linear infinite", flexShrink: 0 }} />
-          <span style={{ fontSize: 13 }}>Loading {brand.name} sale items...</span>
-        </div>
-      )}
-
-      {(state === "error" || state === "blocked") && (
-        <div style={{ padding: "20px 24px", background: "#111", border: "1px solid #1e1e1e", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-          <div style={{ fontSize: 13, color: "#555" }}>
-            {brand.name} blocks automated access — browse their sale page directly.
-          </div>
-          <a href={saleUrl} target="_blank" rel="noopener noreferrer" style={{
-            padding: "9px 18px", background: "#c8f04c", borderRadius: 6,
-            color: "#0a0a0a", fontSize: 12, fontWeight: 800, textDecoration: "none", whiteSpace: "nowrap",
-          }}>
-            Shop Sale ↗
-          </a>
-        </div>
-      )}
-
-      {state === "done" && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
-          {products.map((p, i) => <ProductCard key={i} product={p} />)}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function App() {
-  const [selectedBrands, setSelectedBrands] = useState([]);
-  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [category, setCategory] = useState("All");
+  const [query, setQuery] = useState("");
+  const [inputVal, setInputVal] = useState("");
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [pageUrl, setPageUrl] = useState("https://www.costco.com/deals.html");
+  const [searched, setSearched] = useState(false);
+  const [cached, setCached] = useState(false);
+  const abortRef = useRef(null);
 
-  const toggleBrand = (id) => {
-    setSelectedBrands(prev =>
-      prev.includes(id) ? prev.filter(b => b !== id) : [...prev, id]
-    );
+  const fetchProducts = async (cat, q) => {
+    setLoading(true);
+    setError(null);
+    setProducts([]);
+    setSearched(true);
+    setCached(false);
+
+    try {
+      const params = new URLSearchParams({ category: cat, q: q || "" });
+      const res = await fetch(`/api/products?${params}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Search failed");
+      setProducts(data.products || []);
+      setPageUrl(data.pageUrl || "https://www.costco.com/deals.html");
+      setCached(data.cached || false);
+      if (data.blocked || (data.products || []).length === 0) {
+        setError("No products found. Try a different category or search term.");
+      }
+    } catch (err) {
+      setError(err.message || "Search failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const activeBrands = BRANDS.filter(b => selectedBrands.includes(b.id));
+  const handleCategoryClick = (cat) => {
+    setCategory(cat);
+    fetchProducts(cat, query);
+  };
+
+  const handleSearch = () => {
+    setQuery(inputVal);
+    fetchProducts(category, inputVal);
+  };
 
   return (
     <div style={{ minHeight: "100vh", background: "#0a0a0a", fontFamily: "'DM Sans','Helvetica Neue',Helvetica,sans-serif", color: "#f0ede8" }}>
 
       {/* Header */}
-      <div style={{ borderBottom: "1px solid #1e1e1e", padding: "28px 40px", background: "linear-gradient(180deg,#0d0d0d 0%,#0a0a0a 100%)" }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 4 }}>
-            <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", margin: 0 }}>
-              PRICE<span style={{ color: "#c8f04c" }}>HUNT</span>
-            </h1>
-            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.15em", color: "#555", textTransform: "uppercase" }}>Fashion Sales</span>
+      <div style={{ borderBottom: "1px solid #1e1e1e", padding: "24px 40px", background: "linear-gradient(180deg,#0d0d0d 0%,#0a0a0a 100%)" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 4 }}>
+              <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", margin: 0 }}>
+                COSTCO<span style={{ color: "#c8f04c" }}>HUNT</span>
+              </h1>
+              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.15em", color: "#555", textTransform: "uppercase" }}>Deal Finder</span>
+            </div>
+            <p style={{ margin: 0, fontSize: 13, color: "#555" }}>Browse Costco deals by category or search for specific products</p>
           </div>
-          <p style={{ margin: 0, fontSize: 13, color: "#555" }}>Select brands to browse their current sale items</p>
+          <a href="https://www.costco.com/deals.html" target="_blank" rel="noopener noreferrer" style={{
+            padding: "10px 20px", background: "#003087", borderRadius: 8,
+            color: "#fff", fontSize: 13, fontWeight: 700, textDecoration: "none",
+            display: "flex", alignItems: "center", gap: 6,
+          }}>
+            🏪 Shop Costco.com ↗
+          </a>
         </div>
       </div>
 
-      {/* Controls */}
+      {/* Search + Categories */}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "28px 40px 0" }}>
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#555", textTransform: "uppercase", marginBottom: 10 }}>Select Brands</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {BRANDS.map((brand) => {
-              const active = selectedBrands.includes(brand.id);
-              return (
-                <button key={brand.id} onClick={() => toggleBrand(brand.id)} style={{
-                  padding: "10px 20px", borderRadius: 6, cursor: "pointer",
-                  border: active ? "1.5px solid #c8f04c" : "1.5px solid #222",
-                  background: active ? "#1a2200" : "#111",
-                  color: active ? "#f0ede8" : "#666",
-                  fontSize: 13, fontWeight: 700, transition: "all 0.15s",
-                  display: "flex", alignItems: "center", gap: 8,
-                }}>
-                  <span style={{ fontSize: 16 }}>{brand.emoji}</span>
-                  {brand.name}
-                  {active && <span style={{ fontSize: 10, background: "#c8f04c", color: "#0a0a0a", padding: "1px 6px", borderRadius: 10, fontWeight: 800 }}>ON</span>}
-                </button>
-              );
-            })}
-            {selectedBrands.length > 0 && (
-              <button onClick={() => setSelectedBrands([])} style={{ padding: "10px 14px", borderRadius: 6, border: "1.5px dashed #333", background: "transparent", color: "#555", fontSize: 12, cursor: "pointer" }}>
-                Clear ✕
-              </button>
-            )}
-          </div>
+
+        {/* Search bar */}
+        <div style={{ display: "flex", gap: 10, marginBottom: 24 }}>
+          <input
+            type="text"
+            placeholder='Search Costco deals... e.g. "TV", "protein powder", "sectional sofa"'
+            value={inputVal}
+            onChange={(e) => setInputVal(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !loading && handleSearch()}
+            style={{ flex: 1, padding: "13px 18px", background: "#111", border: "1.5px solid #222", borderRadius: 8, color: "#f0ede8", fontSize: 14, outline: "none", fontFamily: "inherit" }}
+          />
+          <button onClick={handleSearch} disabled={loading} style={{
+            padding: "13px 28px", borderRadius: 8, border: "none",
+            background: loading ? "#1e1e1e" : "#c8f04c",
+            color: loading ? "#555" : "#0a0a0a",
+            fontSize: 14, fontWeight: 800, cursor: loading ? "not-allowed" : "pointer",
+            letterSpacing: "0.04em", textTransform: "uppercase",
+            display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap",
+          }}>
+            {loading
+              ? <><span style={{ width: 14, height: 14, border: "2px solid #444", borderTopColor: "#888", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Searching...</>
+              : "Search →"
+            }
+          </button>
         </div>
 
-        {activeBrands.length > 0 && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 36 }}>
-            {CATEGORIES.map((cat) => (
-              <button key={cat} onClick={() => setSelectedCategory(cat)} style={{
-                padding: "7px 16px", borderRadius: 20, cursor: "pointer", transition: "all 0.15s",
-                border: selectedCategory === cat ? "1.5px solid #c8f04c" : "1.5px solid #1e1e1e",
-                background: selectedCategory === cat ? "#c8f04c" : "transparent",
-                color: selectedCategory === cat ? "#0a0a0a" : "#555",
-                fontSize: 12, fontWeight: selectedCategory === cat ? 700 : 500,
-              }}>{cat}</button>
-            ))}
+        {/* Category pills */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 32 }}>
+          {CATEGORIES.map((cat) => (
+            <button key={cat.id} onClick={() => handleCategoryClick(cat.id)} disabled={loading} style={{
+              padding: "8px 16px", borderRadius: 20, cursor: loading ? "not-allowed" : "pointer",
+              border: category === cat.id ? "1.5px solid #c8f04c" : "1.5px solid #1e1e1e",
+              background: category === cat.id ? "#c8f04c" : "#111",
+              color: category === cat.id ? "#0a0a0a" : "#666",
+              fontSize: 12, fontWeight: category === cat.id ? 700 : 500,
+              transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5,
+            }}>
+              <span>{cat.emoji}</span> {cat.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Results */}
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 40px 60px" }}>
+
+        {/* Loading */}
+        {loading && (
+          <div style={{ textAlign: "center", padding: "60px 0" }}>
+            <div style={{ width: 44, height: 44, border: "3px solid #1e1e1e", borderTopColor: "#c8f04c", borderRadius: "50%", margin: "0 auto 20px", animation: "spin 0.8s linear infinite" }} />
+            <div style={{ color: "#555", fontSize: 14, fontWeight: 600 }}>Searching Costco deals...</div>
+            <div style={{ color: "#333", fontSize: 12, marginTop: 6 }}>This takes 15–25 seconds</div>
           </div>
         )}
-      </div>
 
-      {/* Sections */}
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 40px 60px" }}>
-        {activeBrands.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "80px 0" }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>👆</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#333" }}>Select a brand above to see sale items</div>
-            <div style={{ fontSize: 13, color: "#2a2a2a", marginTop: 8 }}>Pick one or more brands to browse their current deals</div>
+        {/* Error */}
+        {!loading && error && (
+          <div style={{ padding: "16px 20px", background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 8, color: "#ff6b6b", fontSize: 13, marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>⚠️ {error}</span>
+            <a href={pageUrl} target="_blank" rel="noopener noreferrer" style={{ padding: "6px 14px", background: "#003087", borderRadius: 6, color: "#fff", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>
+              Browse Costco ↗
+            </a>
           </div>
-        ) : (
-          activeBrands.map(brand => (
-            <BrandSection key={`${brand.id}-${selectedCategory}`} brand={brand} category={selectedCategory} />
-          ))
+        )}
+
+        {/* Results header */}
+        {!loading && products.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, paddingBottom: 14, borderBottom: "1px solid #1a1a1a" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#666", textTransform: "uppercase" }}>
+              {products.length} Products Found
+            </span>
+            <div style={{ flex: 1, height: 1, background: "#1a1a1a" }} />
+            {cached && <span style={{ fontSize: 11, color: "#444", background: "#111", padding: "3px 8px", borderRadius: 4 }}>📦 Cached</span>}
+            <a href={pageUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "#555", textDecoration: "none", fontWeight: 600 }}>
+              View on Costco.com ↗
+            </a>
+          </div>
+        )}
+
+        {/* Product grid */}
+        {!loading && products.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 16 }}>
+            {products.map((p, i) => <ProductCard key={i} product={p} />)}
+          </div>
+        )}
+
+        {/* Idle state */}
+        {!loading && !searched && (
+          <div style={{ textAlign: "center", padding: "80px 0" }}>
+            <div style={{ fontSize: 56, marginBottom: 16 }}>🛒</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#333", letterSpacing: "-0.02em" }}>Find the best Costco deals</div>
+            <div style={{ fontSize: 13, color: "#2a2a2a", marginTop: 10, maxWidth: 400, margin: "10px auto 0" }}>
+              Pick a category above or search for a specific product to see current Costco prices and deals.
+            </div>
+            <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 28, flexWrap: "wrap" }}>
+              {["65\" TV", "protein powder", "sofa sectional", "diamond ring", "air fryer"].map(q => (
+                <button key={q} onClick={() => { setInputVal(q); setQuery(q); fetchProducts(category, q); }} style={{
+                  padding: "8px 16px", borderRadius: 20, border: "1px solid #222", background: "#111",
+                  color: "#666", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+                  transition: "all 0.15s",
+                }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#c8f04c"; e.currentTarget.style.color = "#f0ede8"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#222"; e.currentTarget.style.color = "#666"; }}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
@@ -213,6 +258,8 @@ export default function App() {
         @keyframes spin { to { transform: rotate(360deg); } }
         * { box-sizing: border-box; }
         body { margin: 0; }
+        input::placeholder { color: #333; }
+        input:focus { border-color: #333 !important; }
       `}</style>
     </div>
   );
