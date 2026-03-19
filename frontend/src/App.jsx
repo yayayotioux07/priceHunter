@@ -12,6 +12,87 @@ const BRANDS = [
 const CATEGORIES = ["All", "Bags", "Shoes", "Clothing", "Accessories", "Jackets"];
 const API_BASE = "";
 
+function ProductCard({ product }) {
+  const meta = BRANDS.find(b => b.name.toLowerCase() === product?.brand?.toLowerCase()) || {};
+  
+  // Safety guards
+  if (!product || !product.name) return null;
+
+  return (
+    <div
+      style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", transition: "border-color 0.15s" }}
+      onMouseEnter={(e) => e.currentTarget.style.borderColor = "#2e2e2e"}
+      onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1e1e1e"}
+    >
+      <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
+        {/* Brand + sale */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#888" }}>
+            {meta.emoji} {product.brand || ""}
+          </span>
+          {product.sale && (
+            <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", background: "#c8f04c", color: "#0a0a0a", padding: "3px 8px", borderRadius: 4 }}>
+              SALE
+            </span>
+          )}
+        </div>
+
+        {/* Name */}
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#f0ede8", lineHeight: 1.35 }}>
+          {product.name}
+        </div>
+
+        {/* Category + source */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {product.category && <span style={{ fontSize: 10, color: "#555", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600 }}>{product.category}</span>}
+          {product.source && (
+            <>
+              <span style={{ color: "#2a2a2a" }}>·</span>
+              <span style={{ fontSize: 10, color: "#3a6e00", fontWeight: 700 }}>✓ {product.source}</span>
+            </>
+          )}
+        </div>
+
+        {/* Description */}
+        {product.description && (
+          <div style={{ fontSize: 12, color: "#666", lineHeight: 1.5 }}>{product.description}</div>
+        )}
+
+        {/* Price */}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
+          <span style={{ fontSize: 22, fontWeight: 800, color: "#c8f04c", letterSpacing: "-0.02em" }}>
+            {product.price || "—"}
+          </span>
+          {product.sale && product.originalPrice && (
+            <span style={{ fontSize: 13, color: "#444", textDecoration: "line-through" }}>{product.originalPrice}</span>
+          )}
+        </div>
+
+        {/* CTA */}
+        {product.url && (
+          <div style={{ marginTop: "auto", paddingTop: 10 }}>
+            <a
+              href={product.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                padding: "10px 16px", background: "#c8f04c", borderRadius: 8,
+                color: "#0a0a0a", fontSize: 13, fontWeight: 800, textDecoration: "none",
+                transition: "opacity 0.15s",
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
+            >
+              View on {product.source || "Official Site"} ↗
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [selectedBrands, setSelectedBrands] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -27,12 +108,13 @@ export default function App() {
     );
   };
 
-  const handleSearch = async () => {
-    const brands =
-      selectedBrands.length > 0
-        ? BRANDS.filter((b) => selectedBrands.includes(b.id)).map((b) => b.name)
-        : BRANDS.map((b) => b.name);
+  const selectedBrandNames = selectedBrands.length > 0
+    ? BRANDS.filter(b => selectedBrands.includes(b.id)).map(b => b.name)
+    : BRANDS.map(b => b.name);
 
+  const estimatedTime = selectedBrandNames.length * 5;
+
+  const handleSearch = async () => {
     setLoading(true);
     setError(null);
     setResults([]);
@@ -42,20 +124,25 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brands, category: selectedCategory, query: query.trim() }),
+        body: JSON.stringify({
+          brands: selectedBrandNames,
+          category: selectedCategory,
+          query: query.trim(),
+        }),
       });
+
       const data = await res.json();
+
       if (!res.ok) throw new Error(data.error || "Search failed.");
-      setResults(data.products || []);
+      if (!Array.isArray(data.products)) throw new Error("Invalid response from server.");
+
+      setResults(data.products);
     } catch (err) {
       setError(err.message || "Search failed. Please try again.");
     } finally {
       setLoading(false);
     }
   };
-
-  const getBrandMeta = (brandName) =>
-    BRANDS.find((b) => b.name.toLowerCase() === brandName?.toLowerCase()) || {};
 
   return (
     <div style={{ minHeight: "100vh", background: "#0a0a0a", fontFamily: "'DM Sans','Helvetica Neue',Helvetica,sans-serif", color: "#f0ede8" }}>
@@ -70,7 +157,7 @@ export default function App() {
             <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.15em", color: "#555", textTransform: "uppercase" }}>Fashion Intelligence</span>
           </div>
           <p style={{ margin: 0, fontSize: 13, color: "#666" }}>
-            Real products & prices scraped live from official brand websites
+            Real products & prices from official brand websites
           </p>
         </div>
       </div>
@@ -80,7 +167,9 @@ export default function App() {
 
         {/* Brand Selector */}
         <div style={{ marginBottom: 28 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#666", textTransform: "uppercase", marginBottom: 12 }}>Select Brands</div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#666", textTransform: "uppercase", marginBottom: 12 }}>
+            Select Brands <span style={{ color: "#333", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— fewer brands = faster results</span>
+          </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {BRANDS.map((brand) => {
               const active = selectedBrands.includes(brand.id);
@@ -103,7 +192,9 @@ export default function App() {
               </button>
             )}
           </div>
-          {selectedBrands.length === 0 && <div style={{ fontSize: 11, color: "#444", marginTop: 8 }}>No brands selected = search all brands</div>}
+          <div style={{ fontSize: 11, color: "#444", marginTop: 8 }}>
+            {selectedBrands.length === 0 ? "All 6 brands selected" : `${selectedBrandNames.length} brand${selectedBrandNames.length > 1 ? "s" : ""} selected`} — estimated wait: ~{estimatedTime}s
+          </div>
         </div>
 
         {/* Categories */}
@@ -135,19 +226,26 @@ export default function App() {
             fontSize: 14, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase",
             transition: "all 0.15s", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 8,
           }}>
-            {loading ? (<><span style={{ width: 14, height: 14, border: "2px solid #444", borderTopColor: "#888", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Scraping sites...</>) : "Search →"}
+            {loading
+              ? <><span style={{ width: 14, height: 14, border: "2px solid #444", borderTopColor: "#888", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Searching...</>
+              : "Search →"
+            }
           </button>
         </div>
 
         {/* Error */}
-        {error && <div style={{ padding: "16px 20px", background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 8, color: "#ff6b6b", fontSize: 13, marginBottom: 24 }}>⚠️ {error}</div>}
+        {error && (
+          <div style={{ padding: "16px 20px", background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 8, color: "#ff6b6b", fontSize: 13, marginBottom: 24 }}>
+            ⚠️ {error}
+          </div>
+        )}
 
         {/* Loading */}
         {loading && (
           <div style={{ textAlign: "center", padding: "60px 0" }}>
             <div style={{ width: 40, height: 40, border: "3px solid #1e1e1e", borderTopColor: "#c8f04c", borderRadius: "50%", margin: "0 auto 20px", animation: "spin 0.8s linear infinite" }} />
             <div style={{ color: "#555", fontSize: 14 }}>Searching official brand websites one by one...</div>
-            <div style={{ color: "#333", fontSize: 12, marginTop: 6 }}>Each brand takes ~5s — searching ${brands?.length || 6} brands takes ~${(brands?.length || 6) * 5}s</div>
+            <div style={{ color: "#333", fontSize: 12, marginTop: 6 }}>~{estimatedTime} seconds for {selectedBrandNames.length} brand{selectedBrandNames.length > 1 ? "s" : ""}</div>
           </div>
         )}
 
@@ -155,89 +253,14 @@ export default function App() {
         {!loading && results.length > 0 && (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, paddingBottom: 16, borderBottom: "1px solid #1a1a1a" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#666", textTransform: "uppercase" }}>{results.length} Real Products Found</span>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#666", textTransform: "uppercase" }}>{results.length} Products Found</span>
               <div style={{ flex: 1, height: 1, background: "#1a1a1a" }} />
-              <span style={{ fontSize: 11, color: "#3a6e00", background: "#1a2200", padding: "3px 8px", borderRadius: 4, fontWeight: 600 }}>✓ Scraped from official sites</span>
+              <span style={{ fontSize: 11, color: "#3a6e00", background: "#1a2200", padding: "3px 8px", borderRadius: 4, fontWeight: 600 }}>✓ Official sites only</span>
             </div>
-
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
-              {results.map((product, i) => {
-                const meta = getBrandMeta(product.brand);
-                return (
-                  <div key={i}
-                    style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", transition: "border-color 0.15s" }}
-                    onMouseEnter={(e) => e.currentTarget.style.borderColor = "#2e2e2e"}
-                    onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1e1e1e"}
-                  >
-                    {/* Product image */}
-                    {product.image && (
-                      <div style={{ width: "100%", height: 200, background: "#161616", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <img
-                          src={product.image}
-                          alt={product.name}
-                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                          onError={(e) => { e.target.parentElement.style.display = "none"; }}
-                        />
-                      </div>
-                    )}
-
-                    <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
-                      {/* Brand + sale badge */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#888", display: "flex", alignItems: "center", gap: 5 }}>
-                          {meta.emoji} {product.brand}
-                        </span>
-                        {product.sale && (
-                          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", background: "#c8f04c", color: "#0a0a0a", padding: "3px 8px", borderRadius: 4 }}>
-                            SALE
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Name */}
-                      <div style={{ fontSize: 14, fontWeight: 700, color: "#f0ede8", lineHeight: 1.35, letterSpacing: "-0.01em" }}>
-                        {product.name}
-                      </div>
-
-                      {/* Category + source */}
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontSize: 10, color: "#555", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600 }}>{product.category}</span>
-                        {product.source && (
-                          <>
-                            <span style={{ color: "#2a2a2a" }}>·</span>
-                            <span style={{ fontSize: 10, color: "#3a6e00", fontWeight: 700, letterSpacing: "0.06em" }}>✓ {product.source}</span>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Price */}
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
-                        <span style={{ fontSize: 22, fontWeight: 800, color: "#c8f04c", letterSpacing: "-0.02em" }}>
-                          {product.price || "—"}
-                        </span>
-                        {product.sale && product.originalPrice && (
-                          <span style={{ fontSize: 13, color: "#444", textDecoration: "line-through" }}>{product.originalPrice}</span>
-                        )}
-                      </div>
-
-                      {/* CTA */}
-                      <div style={{ marginTop: "auto", paddingTop: 10 }}>
-                        <a href={product.url} target="_blank" rel="noopener noreferrer" style={{
-                          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                          padding: "10px 16px", background: "#c8f04c", borderRadius: 8,
-                          color: "#0a0a0a", fontSize: 13, fontWeight: 800, textDecoration: "none",
-                          letterSpacing: "0.03em", transition: "opacity 0.15s",
-                        }}
-                          onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
-                          onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-                        >
-                          View on {product.source || "Official Site"} ↗
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+              {results.map((product, i) => (
+                <ProductCard key={i} product={product} />
+              ))}
             </div>
           </>
         )}
@@ -247,7 +270,7 @@ export default function App() {
           <div style={{ textAlign: "center", padding: "60px 0" }}>
             <div style={{ fontSize: 32, marginBottom: 12 }}>🔍</div>
             <div style={{ fontSize: 15, fontWeight: 600, color: "#555" }}>No products found</div>
-            <div style={{ fontSize: 13, marginTop: 6, color: "#333" }}>Try a broader search term or different brand</div>
+            <div style={{ fontSize: 13, marginTop: 6, color: "#333" }}>Try a different search term or select fewer brands</div>
           </div>
         )}
 
@@ -255,9 +278,9 @@ export default function App() {
         {!loading && !searched && (
           <div style={{ textAlign: "center", padding: "60px 0" }}>
             <div style={{ fontSize: 40, marginBottom: 16 }}>🏷️</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#444", letterSpacing: "-0.01em" }}>Real products, real prices, real links</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#444" }}>Real products, real prices, real links</div>
             <div style={{ fontSize: 13, color: "#333", marginTop: 8, maxWidth: 420, margin: "8px auto 0" }}>
-              Searches are scraped live from official brand websites — every result links to the real product page.
+              Select 1–2 brands for fastest results. All links go directly to official brand pages.
             </div>
           </div>
         )}
