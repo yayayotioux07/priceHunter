@@ -1,11 +1,8 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 
 const BRANDS = [
   {
-    id: "guess",
-    name: "Guess",
-    emoji: "👜",
-    site: "guess.com",
+    id: "guess", name: "Guess", emoji: "👜", site: "guess.com",
     sales: {
       "All":         "https://www.guess.com/en-us/guess/women/sale/",
       "Bags":        "https://www.guess.com/en-us/guess/women/sale/handbags/",
@@ -17,10 +14,7 @@ const BRANDS = [
     },
   },
   {
-    id: "michael_kors",
-    name: "Michael Kors",
-    emoji: "💼",
-    site: "michaelkors.com",
+    id: "michael_kors", name: "Michael Kors", emoji: "💼", site: "michaelkors.com",
     sales: {
       "All":         "https://www.michaelkors.com/sale/",
       "Bags":        "https://www.michaelkors.com/sale/handbags/",
@@ -32,10 +26,7 @@ const BRANDS = [
     },
   },
   {
-    id: "calvin_klein",
-    name: "Calvin Klein",
-    emoji: "🖤",
-    site: "calvinklein.us",
+    id: "calvin_klein", name: "Calvin Klein", emoji: "🖤", site: "calvinklein.us",
     sales: {
       "All":         "https://www.calvinklein.us/sale/",
       "Bags":        "https://www.calvinklein.us/sale/bags-and-accessories/bags/",
@@ -47,10 +38,7 @@ const BRANDS = [
     },
   },
   {
-    id: "tommy_hilfiger",
-    name: "Tommy Hilfiger",
-    emoji: "⚓",
-    site: "tommy.com",
+    id: "tommy_hilfiger", name: "Tommy Hilfiger", emoji: "⚓", site: "tommy.com",
     sales: {
       "All":         "https://usa.tommy.com/en/sale/",
       "Bags":        "https://usa.tommy.com/en/sale/bags/",
@@ -62,10 +50,7 @@ const BRANDS = [
     },
   },
   {
-    id: "adidas",
-    name: "Adidas",
-    emoji: "🦶",
-    site: "adidas.com",
+    id: "adidas", name: "Adidas", emoji: "🦶", site: "adidas.com",
     sales: {
       "All":         "https://www.adidas.com/us/sale",
       "Bags":        "https://www.adidas.com/us/bags-and-backpacks-sale",
@@ -77,10 +62,7 @@ const BRANDS = [
     },
   },
   {
-    id: "nike",
-    name: "Nike",
-    emoji: "✔️",
-    site: "nike.com",
+    id: "nike", name: "Nike", emoji: "✔️", site: "nike.com",
     sales: {
       "All":         "https://www.nike.com/w/sale-3yaep",
       "Bags":        "https://www.nike.com/w/sale-bags-accessories-3yaepzy11j",
@@ -95,6 +77,192 @@ const BRANDS = [
 
 const CATEGORIES = ["All", "Bags", "Shoes", "Clothing", "Accessories", "Sneakers", "Jackets"];
 
+// Parse HTML from brand sale pages to extract products
+function parseProducts(html, brand) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+  const results = [];
+  const seen = new Set();
+
+  const domain = "https://www." + brand.site;
+  const altDomain = brand.site === "tommy.com" ? "https://usa.tommy.com" : domain;
+
+  const links = Array.from(doc.querySelectorAll("a[href]"));
+
+  for (const link of links) {
+    const href = link.getAttribute("href") || "";
+    if (!href || href === "#" || href.includes("javascript:")) continue;
+    if (["/help","/about","/account","/cart","/login","/wishlist","/stores","/sitemap","/sale/","/en/sale/","/en-us/sale/"].some(s => href === s || href === s + "/")) continue;
+
+    const fullUrl = href.startsWith("http") ? href : altDomain + href;
+    if (!fullUrl.includes(brand.site)) continue;
+    if (seen.has(fullUrl)) continue;
+
+    const card = link.closest("li,article,[class*='product'],[class*='Product'],[class*='tile'],[class*='Tile'],[class*='card'],[class*='Card'],[class*='item'],[class*='Item']") || link;
+    const text = card.innerText || card.textContent || "";
+
+    const priceMatches = text.match(/\$[\d,]+\.?\d*/g);
+    if (!priceMatches) continue;
+
+    const nameEl = card.querySelector("h1,h2,h3,h4,[class*='name'],[class*='Name'],[class*='title'],[class*='Title']");
+    const rawName = nameEl?.textContent?.trim() || link.textContent?.trim() || "";
+    const name = rawName.split("\n")[0].trim();
+    if (!name || name.length < 3 || name.length > 120) continue;
+    if (["view all","see all","shop","sale","new arrivals"].some(s => name.toLowerCase() === s)) continue;
+
+    const img = card.querySelector("img");
+    const image = img?.src || img?.dataset?.src || img?.getAttribute("data-lazy-src") || null;
+
+    const salePrice = priceMatches[priceMatches.length - 1];
+    const originalPrice = priceMatches.length > 1 ? priceMatches[0] : null;
+
+    seen.add(fullUrl);
+    results.push({ name, price: salePrice, originalPrice, sale: true, url: fullUrl, image: image?.startsWith("http") ? image : null });
+
+    if (results.length >= 12) break;
+  }
+
+  return results;
+}
+
+async function fetchBrandProducts(brand, category) {
+  const saleUrl = brand.sales[category] || brand.sales["All"];
+  // Use allorigins as CORS proxy
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(saleUrl)}`;
+
+  const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.contents) throw new Error("Empty response");
+
+  const products = parseProducts(data.contents, brand);
+  return { products, saleUrl };
+}
+
+function ProductCard({ product, brand }) {
+  if (!product?.name) return null;
+  return (
+    <a href={product.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+      <div style={{
+        background: "#0e0e0e", border: "1px solid #1e1e1e", borderRadius: 10,
+        overflow: "hidden", display: "flex", flexDirection: "column",
+        transition: "border-color 0.15s", cursor: "pointer", height: "100%",
+      }}
+        onMouseEnter={(e) => e.currentTarget.style.borderColor = "#c8f04c"}
+        onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1e1e1e"}
+      >
+        {product.image && (
+          <div style={{ width: "100%", height: 180, background: "#161616", overflow: "hidden" }}>
+            <img src={product.image} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              onError={(e) => { e.target.parentElement.style.display = "none"; }} />
+          </div>
+        )}
+        <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#f0ede8", lineHeight: 1.3 }}>{product.name}</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: "auto", paddingTop: 8 }}>
+            <span style={{ fontSize: 18, fontWeight: 800, color: "#c8f04c" }}>{product.price}</span>
+            {product.originalPrice && (
+              <span style={{ fontSize: 12, color: "#444", textDecoration: "line-through" }}>{product.originalPrice}</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </a>
+  );
+}
+
+function BrandSection({ brand, category, active }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | error | blocked
+  const [products, setProducts] = useState([]);
+  const [saleUrl, setSaleUrl] = useState(brand.sales[category] || brand.sales["All"]);
+
+  const load = useCallback(async (cat) => {
+    setState("loading");
+    setProducts([]);
+    try {
+      const { products: p, saleUrl: u } = await fetchBrandProducts(brand, cat);
+      setSaleUrl(u);
+      if (p.length === 0) {
+        setState("blocked");
+      } else {
+        setProducts(p);
+        setState("done");
+      }
+    } catch (e) {
+      console.error(brand.name, e.message);
+      setState("error");
+    }
+  }, [brand]);
+
+  // Load when brand becomes active
+  useState(() => {
+    if (active) load(category);
+  });
+
+  // Reload when category changes and brand is active
+  const [lastCat, setLastCat] = useState(category);
+  if (active && category !== lastCat) {
+    setLastCat(category);
+    load(category);
+  }
+
+  if (!active) return null;
+
+  const url = brand.sales[category] || brand.sales["All"];
+
+  return (
+    <div style={{ marginBottom: 48 }}>
+      {/* Brand header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #1a1a1a" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 24 }}>{brand.emoji}</span>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#f0ede8", letterSpacing: "-0.02em" }}>{brand.name}</div>
+            <div style={{ fontSize: 11, color: "#444" }}>{brand.site} · {category} Sale</div>
+          </div>
+        </div>
+        <a href={url} target="_blank" rel="noopener noreferrer" style={{
+          padding: "8px 16px", background: "#c8f04c", borderRadius: 6,
+          color: "#0a0a0a", fontSize: 12, fontWeight: 800, textDecoration: "none",
+        }}>
+          View All ↗
+        </a>
+      </div>
+
+      {/* States */}
+      {state === "loading" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "24px 0", color: "#555" }}>
+          <div style={{ width: 18, height: 18, border: "2px solid #222", borderTopColor: "#c8f04c", borderRadius: "50%", animation: "spin 0.7s linear infinite", flexShrink: 0 }} />
+          <span style={{ fontSize: 13 }}>Loading {brand.name} sale items...</span>
+        </div>
+      )}
+
+      {(state === "error" || state === "blocked") && (
+        <div style={{ padding: "20px 24px", background: "#111", border: "1px solid #1e1e1e", borderRadius: 10 }}>
+          <div style={{ fontSize: 13, color: "#666", marginBottom: 12 }}>
+            {state === "blocked"
+              ? `${brand.name}'s website blocks direct access — click below to browse their sale page.`
+              : `Couldn't load ${brand.name} items — click below to browse directly.`}
+          </div>
+          <a href={url} target="_blank" rel="noopener noreferrer" style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "10px 18px", background: "#c8f04c", borderRadius: 6,
+            color: "#0a0a0a", fontSize: 13, fontWeight: 800, textDecoration: "none",
+          }}>
+            Shop {brand.name} {category !== "All" ? category : ""} Sale ↗
+          </a>
+        </div>
+      )}
+
+      {state === "done" && products.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
+          {products.map((p, i) => <ProductCard key={i} product={p} brand={brand} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [selectedBrands, setSelectedBrands] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -105,157 +273,95 @@ export default function App() {
     );
   };
 
-  const visibleBrands = selectedBrands.length > 0
+  const activeBrands = selectedBrands.length > 0
     ? BRANDS.filter(b => selectedBrands.includes(b.id))
-    : BRANDS;
+    : [];
 
   return (
     <div style={{ minHeight: "100vh", background: "#0a0a0a", fontFamily: "'DM Sans','Helvetica Neue',Helvetica,sans-serif", color: "#f0ede8" }}>
 
       {/* Header */}
-      <div style={{ borderBottom: "1px solid #1e1e1e", padding: "32px 40px 28px", background: "linear-gradient(180deg,#0d0d0d 0%,#0a0a0a 100%)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 6 }}>
+      <div style={{ borderBottom: "1px solid #1e1e1e", padding: "28px 40px", background: "linear-gradient(180deg,#0d0d0d 0%,#0a0a0a 100%)" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 4 }}>
             <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", margin: 0 }}>
               PRICE<span style={{ color: "#c8f04c" }}>HUNT</span>
             </h1>
             <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.15em", color: "#555", textTransform: "uppercase" }}>Fashion Sales</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, color: "#666" }}>
-            Browse sale sections across top fashion brands — pick a category and go straight to the deals
-          </p>
+          <p style={{ margin: 0, fontSize: 13, color: "#555" }}>Select brands to browse their sale items by category</p>
         </div>
       </div>
 
       {/* Controls */}
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 40px 0" }}>
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "28px 40px 0" }}>
 
-        {/* Brand Selector */}
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#666", textTransform: "uppercase", marginBottom: 12 }}>
-            Filter Brands
-          </div>
+        {/* Brand Buttons */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#555", textTransform: "uppercase", marginBottom: 10 }}>Select Brands</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {BRANDS.map((brand) => {
               const active = selectedBrands.includes(brand.id);
               return (
                 <button key={brand.id} onClick={() => toggleBrand(brand.id)} style={{
-                  padding: "9px 18px", borderRadius: 6, cursor: "pointer",
+                  padding: "10px 20px", borderRadius: 6, cursor: "pointer",
                   border: active ? "1.5px solid #c8f04c" : "1.5px solid #222",
                   background: active ? "#1a2200" : "#111",
                   color: active ? "#f0ede8" : "#666",
-                  fontSize: 13, fontWeight: 600, transition: "all 0.15s",
-                  display: "flex", alignItems: "center", gap: 6,
+                  fontSize: 13, fontWeight: 700, transition: "all 0.15s",
+                  display: "flex", alignItems: "center", gap: 8,
                 }}>
-                  <span style={{ fontSize: 15 }}>{brand.emoji}</span>{brand.name}
+                  <span style={{ fontSize: 16 }}>{brand.emoji}</span>{brand.name}
+                  {active && <span style={{ fontSize: 10, background: "#c8f04c", color: "#0a0a0a", padding: "1px 6px", borderRadius: 10, fontWeight: 800 }}>ON</span>}
                 </button>
               );
             })}
             {selectedBrands.length > 0 && (
-              <button onClick={() => setSelectedBrands([])} style={{ padding: "9px 14px", borderRadius: 6, border: "1.5px dashed #333", background: "transparent", color: "#555", fontSize: 12, cursor: "pointer" }}>
-                Clear ✕
+              <button onClick={() => setSelectedBrands([])} style={{ padding: "10px 14px", borderRadius: 6, border: "1.5px dashed #333", background: "transparent", color: "#555", fontSize: 12, cursor: "pointer" }}>
+                Clear all ✕
               </button>
             )}
           </div>
         </div>
 
-        {/* Category Tabs */}
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 36 }}>
-          {CATEGORIES.map((cat) => (
-            <button key={cat} onClick={() => setSelectedCategory(cat)} style={{
-              padding: "8px 16px", borderRadius: 20, cursor: "pointer", transition: "all 0.15s",
-              border: selectedCategory === cat ? "1.5px solid #c8f04c" : "1.5px solid #1e1e1e",
-              background: selectedCategory === cat ? "#c8f04c" : "transparent",
-              color: selectedCategory === cat ? "#0a0a0a" : "#555",
-              fontSize: 12, fontWeight: selectedCategory === cat ? 700 : 500,
-            }}>{cat}</button>
-          ))}
-        </div>
+        {/* Category Filter */}
+        {selectedBrands.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 36 }}>
+            {CATEGORIES.map((cat) => (
+              <button key={cat} onClick={() => setSelectedCategory(cat)} style={{
+                padding: "7px 16px", borderRadius: 20, cursor: "pointer", transition: "all 0.15s",
+                border: selectedCategory === cat ? "1.5px solid #c8f04c" : "1.5px solid #1e1e1e",
+                background: selectedCategory === cat ? "#c8f04c" : "transparent",
+                color: selectedCategory === cat ? "#0a0a0a" : "#555",
+                fontSize: 12, fontWeight: selectedCategory === cat ? 700 : 500,
+              }}>{cat}</button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Brand Cards Grid */}
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 40px 60px" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#444", textTransform: "uppercase", marginBottom: 20 }}>
-          {visibleBrands.length} Brand{visibleBrands.length !== 1 ? "s" : ""} · {selectedCategory} Sale
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16 }}>
-          {visibleBrands.map((brand) => {
-            const saleUrl = brand.sales[selectedCategory] || brand.sales["All"];
-            return (
-              <div key={brand.id} style={{
-                background: "#111", border: "1px solid #1e1e1e", borderRadius: 12,
-                overflow: "hidden", transition: "border-color 0.2s",
-              }}
-                onMouseEnter={(e) => e.currentTarget.style.borderColor = "#2e2e2e"}
-                onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1e1e1e"}
-              >
-                {/* Brand header */}
-                <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1a1a1a" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 28 }}>{brand.emoji}</span>
-                      <div>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: "#f0ede8", letterSpacing: "-0.02em" }}>{brand.name}</div>
-                        <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>{brand.site}</div>
-                      </div>
-                    </div>
-                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", background: "#c8f04c", color: "#0a0a0a", padding: "4px 10px", borderRadius: 20 }}>
-                      SALE
-                    </span>
-                  </div>
-                </div>
-
-                {/* Category links */}
-                <div style={{ padding: "16px 24px" }}>
-                  <div style={{ fontSize: 11, color: "#444", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 12 }}>
-                    Browse by category
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
-                    {CATEGORIES.filter(c => c !== "All").map((cat) => {
-                      const url = brand.sales[cat] || brand.sales["All"];
-                      const isSelected = cat === selectedCategory;
-                      return (
-                        <a key={cat} href={url} target="_blank" rel="noopener noreferrer" style={{
-                          padding: "5px 12px", borderRadius: 20, fontSize: 11, fontWeight: 600,
-                          textDecoration: "none", transition: "all 0.15s",
-                          border: isSelected ? "1px solid #c8f04c" : "1px solid #252525",
-                          background: isSelected ? "#1a2200" : "transparent",
-                          color: isSelected ? "#c8f04c" : "#555",
-                        }}
-                          onMouseEnter={(e) => { e.currentTarget.style.color = "#f0ede8"; e.currentTarget.style.borderColor = "#444"; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.color = isSelected ? "#c8f04c" : "#555"; e.currentTarget.style.borderColor = isSelected ? "#c8f04c" : "#252525"; }}
-                        >
-                          {cat}
-                        </a>
-                      );
-                    })}
-                  </div>
-
-                  {/* Main CTA */}
-                  <a
-                    href={saleUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                      display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                      padding: "12px 20px", background: "#c8f04c", borderRadius: 8,
-                      color: "#0a0a0a", fontSize: 13, fontWeight: 800,
-                      textDecoration: "none", letterSpacing: "0.03em", transition: "opacity 0.15s",
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
-                    onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-                  >
-                    Shop {brand.name} {selectedCategory !== "All" ? selectedCategory : ""} Sale ↗
-                  </a>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      {/* Product Sections */}
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 40px 60px" }}>
+        {selectedBrands.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "80px 0" }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>👆</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#333" }}>Select a brand above to browse their sale items</div>
+            <div style={{ fontSize: 13, color: "#2a2a2a", marginTop: 8 }}>Pick one or more brands to see their current sale products</div>
+          </div>
+        ) : (
+          BRANDS.map(brand => (
+            <BrandSection
+              key={brand.id}
+              brand={brand}
+              category={selectedCategory}
+              active={selectedBrands.includes(brand.id)}
+            />
+          ))
+        )}
       </div>
 
       <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
         * { box-sizing: border-box; }
         body { margin: 0; }
       `}</style>
