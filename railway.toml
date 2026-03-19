@@ -5,6 +5,6 @@ buildCommand = "cd frontend && npm install && npm run build && cd ../backend && 
 [deploy]
 startCommand = "cd backend && node server.js"
 healthcheckPath = "/api/health"
-healthcheckTimeout = 60
+healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
