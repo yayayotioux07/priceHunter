@@ -157,7 +157,7 @@ export default function App() {
             <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.15em", color: "#555", textTransform: "uppercase" }}>Fashion Intelligence</span>
           </div>
           <p style={{ margin: 0, fontSize: 13, color: "#666" }}>
-            Real products & prices from official brand websites
+            Live sale prices scraped from official brand websites
           </p>
         </div>
       </div>
@@ -255,7 +255,7 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, paddingBottom: 16, borderBottom: "1px solid #1a1a1a" }}>
               <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "#666", textTransform: "uppercase" }}>{results.length} Products Found</span>
               <div style={{ flex: 1, height: 1, background: "#1a1a1a" }} />
-              <span style={{ fontSize: 11, color: "#3a6e00", background: "#1a2200", padding: "3px 8px", borderRadius: 4, fontWeight: 600 }}>✓ Official sites only</span>
+              <span style={{ fontSize: 11, color: "#3a6e00", background: "#1a2200", padding: "3px 8px", borderRadius: 4, fontWeight: 600 }}>🏷️ Sale prices from official sites</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
               {results.map((product, i) => (
@@ -278,9 +278,9 @@ export default function App() {
         {!loading && !searched && (
           <div style={{ textAlign: "center", padding: "60px 0" }}>
             <div style={{ fontSize: 40, marginBottom: 16 }}>🏷️</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#444" }}>Real products, real prices, real links</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#444" }}>Sale prices. Official sites. Real links.</div>
             <div style={{ fontSize: 13, color: "#333", marginTop: 8, maxWidth: 420, margin: "8px auto 0" }}>
-              Select 1–2 brands for fastest results. All links go directly to official brand pages.
+              Searches the sale section of each brand directly. Select 1–2 brands for fastest results.
             </div>
           </div>
         )}
