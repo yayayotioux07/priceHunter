@@ -13,72 +13,70 @@ const COSTCO_CATEGORIES = {
   "Health & Beauty":"https://www.costco.com/health-beauty.html",
 };
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 async function scrapeCostco(category, searchQuery) {
   const pageUrl = COSTCO_CATEGORIES[category] || COSTCO_CATEGORIES["All"];
-  const catLabel = category !== "All" ? category : "deals";
-  const queryHint = searchQuery ? `matching "${searchQuery}"` : "";
+  const topic = searchQuery || (category !== "All" ? category : "deals");
 
-  console.log(`🤖 Agent scraping Costco / ${category} ${queryHint}`);
+  console.log(`🤖 Costco search: "${topic}"`);
 
-  const systemPrompt = `You are a Costco product search assistant. Use web_search to find specific products currently on sale or available at Costco.com.
-Search multiple times with different queries to find real products with specific names, prices, and direct Costco.com URLs.
-Return ONLY a raw JSON array. No markdown, no explanation, no backticks.
-Each item must have:
-- name: specific product name (e.g. "Samsung 65\" 4K QLED TV")
-- price: current Costco price (e.g. "$799.99")
-- originalPrice: original price if on sale (e.g. "$1299.99") or null
-- savings: dollar amount saved if on sale (e.g. "$500.00") or null
-- url: direct product URL on costco.com
-- sale: true if discounted
-- itemNumber: Costco item number if found (e.g. "123456") or null
-Only include products with specific names and real costco.com URLs — not category pages.`;
+  // Very short prompt to stay under token limits
+  const systemPrompt = `Find Costco products. Use web_search. Return ONLY a JSON array, no markdown.
+Each item: {"name":"...","price":"$X","originalPrice":"$X or null","savings":"$X or null","url":"https://www.costco.com/...","sale":true,"itemNumber":"# or null"}
+Only real costco.com product URLs. Max 8 items.`;
 
-  const userMsg = `Find 8-10 specific ${catLabel} products ${queryHint} currently available on costco.com.
+  const userMsg = `Search: "costco ${topic} price site:costco.com"
+Return JSON array of products found with names, prices, and costco.com URLs.`;
 
-Search using these queries in order:
-1. "costco ${catLabel} ${searchQuery || ""} site:costco.com price"
-2. "costco.com ${catLabel} ${searchQuery || ""} $ member price"
-3. "costco ${searchQuery || catLabel} deal savings"
+  // Retry up to 3 times with increasing delays on rate limit
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      if (attempt > 1) {
+        const delay = attempt * 10000;
+        console.log(`⏳ Retry ${attempt} after ${delay/1000}s...`);
+        await sleep(delay);
+      }
 
-Extract specific product names, prices, savings amounts, and direct costco.com product URLs.
-Return as JSON array: [{"name":"...","price":"$X","originalPrice":"$X or null","savings":"$X or null","url":"https://www.costco.com/...","sale":true,"itemNumber":"..."}]`;
+      const response = await client.messages.create({
+        model: "claude-haiku-4-5-20251001", // Haiku is cheaper + faster = less rate limit pressure
+        max_tokens: 1000,
+        system: systemPrompt,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        messages: [{ role: "user", content: userMsg }],
+      });
 
-  try {
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2000,
-      system: systemPrompt,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      messages: [{ role: "user", content: userMsg }],
-    });
+      const text = response.content
+        .filter(b => b.type === "text")
+        .map(b => b.text)
+        .join("");
 
-    const text = response.content
-      .filter(b => b.type === "text")
-      .map(b => b.text)
-      .join("");
+      console.log(`📝 Response: ${text.substring(0, 200)}`);
 
-    console.log(`📝 Costco response: ${text.substring(0, 300)}`);
+      const match = text.match(/\[[\s\S]*\]/);
+      if (!match) return { products: [], pageUrl };
 
-    const match = text.match(/\[[\s\S]*\]/);
-    if (!match) return { products: [], pageUrl };
+      let products = JSON.parse(match[0]);
+      products = products.filter(p =>
+        p?.name && p?.price &&
+        p?.url?.includes("costco.com") &&
+        p.url.length > "https://www.costco.com/".length
+      );
 
-    let products = JSON.parse(match[0]);
+      console.log(`✅ Costco: ${products.length} products`);
+      return { products: products.slice(0, 8), pageUrl };
 
-    // Only keep real costco.com product URLs
-    products = products.filter(p =>
-      p && p.name && p.price &&
-      p.url && p.url.includes("costco.com") &&
-      !p.url.endsWith("costco.com/") &&
-      p.url.includes("/")
-    );
-
-    console.log(`✅ Costco ${category}: ${products.length} products`);
-    return { products: products.slice(0, 12), pageUrl };
-
-  } catch (err) {
-    console.error(`❌ Costco agent error:`, err.message);
-    return { products: [], pageUrl };
+    } catch (err) {
+      if (err.status === 429 && attempt < 3) {
+        console.warn(`⚠️ Rate limited, will retry...`);
+        continue;
+      }
+      console.error(`❌ Costco error:`, err.message);
+      return { products: [], pageUrl };
+    }
   }
+
+  return { products: [], pageUrl };
 }
 
 module.exports = { scrapeCostco, COSTCO_CATEGORIES };
