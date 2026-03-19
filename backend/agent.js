@@ -59,22 +59,52 @@ const SALE_URLS = {
   },
 };
 
+const BRAND_NAMES = {
+  "guess": "Guess",
+  "michael_kors": "Michael Kors",
+  "calvin_klein": "Calvin Klein",
+  "tommy_hilfiger": "Tommy Hilfiger",
+  "adidas": "Adidas",
+  "nike": "Nike",
+};
+
+const BRAND_DOMAINS = {
+  "guess": "guess.com",
+  "michael_kors": "michaelkors.com",
+  "calvin_klein": "calvinklein.us",
+  "tommy_hilfiger": "tommy.com",
+  "adidas": "adidas.com",
+  "nike": "nike.com",
+};
+
 async function scrapeWithAgent(brandId, category) {
   const urls = SALE_URLS[brandId];
   if (!urls) return { products: [], saleUrl: "#" };
 
   const saleUrl = urls[category] || urls["All"];
-  console.log(`🤖 Agent scraping ${brandId} / ${category}: ${saleUrl}`);
+  const brandName = BRAND_NAMES[brandId];
+  const domain = BRAND_DOMAINS[brandId];
+  const catLabel = category !== "All" ? category : "";
 
-  const systemPrompt = `You are a web scraping assistant. You will be given a URL to visit.
-Use the web_search tool to search for products on that exact page.
-Search for products on the page and extract: name, price, sale price, original price, and direct product URL.
-Return ONLY a JSON array of products. No markdown. No explanation.
-Each item: {"name":"...","price":"$X.XX","originalPrice":"$X.XX or null","url":"https://...","image":null,"sale":true}
-Find as many real products as you can, up to 12. Only include products with real prices and URLs from the brand's official site.`;
+  console.log(`🤖 Agent scraping ${brandId} / ${category}`);
 
-  const userMsg = `Visit this sale page and extract all product listings with their names, prices, and URLs: ${saleUrl}
-Search for products listed on this page. Return them as a JSON array.`;
+  const systemPrompt = `You are a product data extraction assistant. Use web_search to find specific products currently on sale.
+You must search multiple times to find individual products with specific names, prices, and direct URLs.
+Return ONLY a raw JSON array with no markdown or explanation.
+Each product must have: name (specific product name), price (sale price like "$49.99"), originalPrice (original price like "$89.00" or null), url (direct product URL on ${domain}), sale (true).
+Only include products with specific names and prices — not category pages.`;
+
+  // Search for specific products multiple times with different queries
+  const userMsg = `Search for specific ${catLabel} products currently on sale at ${brandName} (${domain}).
+
+Do these searches one by one:
+1. Search: "${brandName} ${catLabel} sale price site:${domain}"
+2. Search: "${brandName} ${catLabel} % off sale 2024 site:${domain}"  
+3. Search: "${brandName} sale ${catLabel} $"
+
+For each search result, extract specific product names, their sale prices, original prices, and direct URLs from ${domain}.
+Return a JSON array of 6-10 specific products like:
+[{"name":"Hamilton Satchel","price":"$149.00","originalPrice":"$298.00","url":"https://www.${domain}/hamilton-satchel/...","sale":true}]`;
 
   try {
     const response = await client.messages.create({
@@ -90,15 +120,28 @@ Search for products listed on this page. Return them as a JSON array.`;
       .map(b => b.text)
       .join("");
 
-    console.log(`📝 ${brandId} response: ${text.substring(0, 200)}`);
+    console.log(`📝 ${brandId}: ${text.substring(0, 300)}`);
 
+    // Try to find JSON array in response
     const match = text.match(/\[[\s\S]*\]/);
-    if (!match) return { products: [], saleUrl };
+    if (!match) {
+      console.log(`⚠️ ${brandId}: no JSON found`);
+      return { products: [], saleUrl };
+    }
 
-    const products = JSON.parse(match[0]);
-    console.log(`✅ ${brandId}: ${products.length} products`);
+    let products = JSON.parse(match[0]);
 
+    // Filter to only include products with real domain URLs
+    products = products.filter(p =>
+      p && p.name && p.price &&
+      p.url && p.url.includes(domain) &&
+      !p.url.endsWith(domain + "/") &&
+      !p.url.endsWith(domain)
+    );
+
+    console.log(`✅ ${brandId}: ${products.length} products after filtering`);
     return { products: products.slice(0, 12), saleUrl };
+
   } catch (err) {
     console.error(`❌ Agent error for ${brandId}:`, err.message);
     return { products: [], saleUrl };
